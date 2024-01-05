@@ -2,6 +2,8 @@ use ggez::conf::WindowSetup;
 use ggez::{Context, ContextBuilder, GameResult};
 use ggez::graphics::{self, Color, Quad, Rect, DrawParam, MeshBuilder, DrawMode, Mesh};
 use ggez::event::{self, EventHandler};
+use rand::{thread_rng, Rng};
+use rand::rngs::ThreadRng;
 
 const WIDTH: usize = 64;
 const HEIGHT: usize = 32;
@@ -43,6 +45,7 @@ struct Game {
     regs: [u8; 16],
     addr_reg: u16,
     pc: u16,
+    rng: ThreadRng,
 }
 
 impl Game {
@@ -54,11 +57,12 @@ impl Game {
             regs: [0; 16],
             addr_reg: 0,
             pc: 0x200,
+            rng: thread_rng(),
         }
     }
 
     fn load_opcode(&self, addr: u16) -> u16 {
-        (self.memory[addr as usize] as u16) << 1 | (self.memory[addr as usize + 1] as u16)
+        (self.memory[addr as usize] as u16) << 16 | (self.memory[addr as usize + 1] as u16)
     }
 
     fn handle_opcode(&mut self) {
@@ -111,16 +115,96 @@ impl Game {
                 *reg = (opcode & 0x00FF) as u8;
             },
             0x7 => {
-                // 6XNN - VX += NN
+                // 7XNN - VX += NN
                 let reg = &mut self.regs[opcode as usize & 0x0F00];
                 *reg += (opcode & 0x00FF) as u8;
             },
-            0x8 => {},
-            0x9 => {},
-            0xA => {},
-            0xB => {},
-            0xC => {},
-            0xD => {},
+            0x8 => {
+                // 8XYO - perform operation - on VX and VY
+                let reg_y = self.regs[opcode as usize & 0x00F0];
+                let reg_x = &mut self.regs[opcode as usize & 0x0F00];
+                
+                match opcode & 0x000F {
+                    0x0 => *reg_x = reg_y,
+                    0x1 => *reg_x |= reg_y,
+                    0x2 => *reg_x &= reg_y,
+                    0x3 => *reg_x ^= reg_y,
+                    0x4 => {
+                        // 8XY4 - VX += VY. VF is set to 1 if overflow happened. only lower 8 bits are kept
+                        let result = reg_x.wrapping_add(reg_y);
+                        let overflow = reg_x.overflowing_add(reg_y).1;
+                        *reg_x = result;
+                        self.regs[15] = if overflow { 1 } else { 0 };
+                    },
+                    0x5 => {
+                        // 8XY5 - VX -= VY. VF is set to 0 if underflow happened. only lower 8 bits are kept
+                        let result = reg_x.wrapping_sub(reg_y);
+                        *reg_x = result;
+                        self.regs[15] = if *reg_x > reg_y { 1 } else { 0 };
+                    },
+                    0x6 => {
+                        // 8XY6 - VX >>= 1. VF is set to LSB of VX before shift
+                        let before_shift = *reg_x;
+                        *reg_x >>= 1;
+                        self.regs[15] = before_shift & 1;
+                    },
+                    0x7 => {
+                        // 8XY7 - VX = VY - VX. VF is set to 0 if underflow happened. only lower 8 bits are kept
+                        let before_add = *reg_x;
+                        let result = reg_y.wrapping_sub(*reg_x);
+                        *reg_x = result;
+                        self.regs[15] = if reg_y > before_add { 1 } else { 0 };
+                    },
+                    0xE => {
+                        // 8XYE - VX <<= 1. VF is set to MSB of VX before shift
+                        let before_shift = *reg_x;
+                        *reg_x <<= 1;
+                        self.regs[15] = before_shift & 0b1000_0000;
+                    },
+                    _ => panic!("Unsopported opcode {:#06x}", opcode),
+                };
+            },
+            0x9 => {
+                // 9XY0 - skip next instruction if VX != VY
+                let reg_x = self.regs[opcode as usize & 0x0F00];
+                let reg_y = self.regs[opcode as usize & 0x00F0];
+                if reg_x != reg_y {
+                    self.pc += 2;
+                }
+            },
+            0xA => self.addr_reg = opcode & 0x0FFF, // ANNN - sets I to NNN
+            0xB => self.pc = self.regs[0] as u16 + opcode as u16 & 0x0FFF,  // BXNN jump to NNN + V0
+            0xC => {
+                // CXNN - VX = rand & NN; rand 0-255
+                let result = self.rng.gen::<u8>() & (opcode & 0x00FF) as u8;
+                let reg = &mut self.regs[opcode as usize & 0x0F00];
+                *reg = result;
+            },
+            0xD => {
+                // DXYN - Draw sprit to coord (VX, VY) - width 8 pixels, height N pixels.
+                //        Read from memory location I. VF set to 1 if any pixels erased
+                let col = self.regs[opcode as usize & 0x0F00];
+                let row = self.regs[opcode as usize & 0x00F0];
+                let rows = opcode & 0x000F;
+                let sprite = &self.memory[self.addr_reg as usize..(self.addr_reg + rows) as usize];
+                self.regs[15] = 0;
+
+                for (row_i, sprite_row) in sprite.iter().enumerate() {
+                    for col_i in 0..8 {
+                        let sprite_pixel = (sprite_row & (1 << col_i)) == 1;
+                        let screen_pixel = self.pixels[row_i][col_i];
+
+                        if sprite_pixel != screen_pixel {
+                            self.pixels[row_i][col_i] = true;
+                        }
+
+                        // if gone from set to unset then set VF to 1
+                        if screen_pixel == true && self.pixels[row_i][col_i] == false {
+                            self.regs[15] = 1;
+                        }
+                    }
+                }
+            },
             0xE => {},
             0xF => {},
             _ => panic!("should only be a nibble"),

@@ -719,6 +719,7 @@ name = "fish_n_chip8"
 version = "0.1.0"
 dependencies = [
  "ggez",
+ "rand",
 ]
 
 [[package]]
