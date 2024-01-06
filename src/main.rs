@@ -1,34 +1,71 @@
+use std::collections::HashSet;
 use std::fs;
 use std::env;
+use std::path;
+use ggez::audio::Source;
 use ggez::conf::WindowSetup;
+use ggez::glam::Vec2;
+use ggez::graphics::InstanceArray;
+use ggez::graphics::Transform;
 use ggez::{Context, ContextBuilder, GameResult};
-use ggez::graphics::{self, Color, Quad, Rect, DrawParam};
+use ggez::input::keyboard::{KeyCode, KeyboardContext};
+use ggez::graphics::{self, Color, Quad, Rect, DrawParam, Image};
 use ggez::event::{self, EventHandler};
+use ggez::audio;
+use ggez::audio::SoundSource;
 use rand::{thread_rng, Rng};
 use rand::rngs::ThreadRng;
 
 const WIDTH: usize = 64;
 const HEIGHT: usize = 32;
 
-// Now we define the pixel size of each tile, which we make 32x32 pixels.
-const PIXEL_WIDTH: i32 = 16;
-const PIXEL_HEIGHT: i32 = 16;
-// Next we define how large we want our actual window to be by multiplying
-// the components of our grid size by its corresponding pixel size.
+const PIXEL_SIZE: f32 = 16.0;
+
 const SCREEN_SIZE: (f32, f32) = (
-    WIDTH as f32 * PIXEL_WIDTH as f32,
-    HEIGHT as f32 * PIXEL_HEIGHT as f32,
+    WIDTH as f32 * PIXEL_SIZE,
+    HEIGHT as f32 * PIXEL_SIZE,
 );
 
 const RAM_SIZE: usize = 4096;
 
+const FONT_DATA: [u8; 5 * 16] = [
+    0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+    0x20, 0x60, 0x20, 0x20, 0x70, // 1
+    0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+    0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+    0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+    0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+    0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+    0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+    0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+    0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+    0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+    0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+    0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+    0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+    0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+    0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+];
+
+const FONT_START: usize = 0x50;
+const FONT_END: usize = FONT_START + FONT_DATA.len();
+
 fn main() {
     let args: Vec<String> = env::args().collect();
+
+    let resource_dir = if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
+        let mut path = path::PathBuf::from(manifest_dir);
+        path.push("resources");
+        path
+    } else {
+        path::PathBuf::from("./resources")
+    };
 
     let (mut ctx, event_loop) =
         ContextBuilder::new("fish_n_chip8", "jenningsfan")
         .window_setup(WindowSetup::default().title("Fish n CHIP-8"))
         .window_mode(ggez::conf::WindowMode::default().dimensions(SCREEN_SIZE.0, SCREEN_SIZE.1))
+        .add_resource_path(resource_dir)
         .build()
         .expect("Failed to create game context");
 
@@ -40,6 +77,11 @@ fn main() {
 
 struct Game {
     pixels: Vec<Vec<bool>>,
+    pixels_batch: InstanceArray,
+    pixels_dirty: bool,
+    delay_timer: u8,
+    sound_timer: u8,
+    beep_sound: Source,
     memory: Vec<u8>,
     stack: Vec<u16>,
     regs: [u8; 16],
@@ -49,16 +91,29 @@ struct Game {
 }
 
 impl Game {
-    pub fn new(_ctx: &mut Context) -> Game {
-        Game {
-            pixels: vec![vec![false; WIDTH]; HEIGHT],
+    pub fn new(ctx: &mut Context) -> Game {
+        let pixel_rect = Image::from_color(&ctx.gfx, PIXEL_SIZE as u32, PIXEL_SIZE as u32, Some(Color::WHITE));
+        let mut pixels_batch = InstanceArray::new(&ctx.gfx, pixel_rect);
+
+        let mut created = Game {
+            pixels: vec![vec![true; WIDTH]; HEIGHT],
+            pixels_batch,
+            pixels_dirty: false,
+            delay_timer: 0,
+            sound_timer: 0,
+            beep_sound: audio::Source::new(ctx, "/beep.wav").unwrap(),
             memory: vec![0; RAM_SIZE],
             stack: vec![],
             regs: [0; 16],
             addr_reg: 0,
             pc: 0x200,
             rng: thread_rng(),
-        }
+        };
+
+        created.memory[FONT_START..FONT_END].copy_from_slice(&FONT_DATA);
+        created.beep_sound.set_repeat(true);
+
+        created
     }
 
     fn load_rom(&mut self, path: &str) {
@@ -70,14 +125,17 @@ impl Game {
         (self.memory[addr as usize] as u16) << 8 | (self.memory[addr as usize + 1] as u16)
     }
 
-    fn handle_opcode(&mut self) {
+    fn handle_opcode(&mut self, key_ctx: &KeyboardContext) {
         let opcode = self.load_opcode(self.pc);
         self.pc += 2;
 
         match (opcode & 0xF000) >> 12 {
             0x0 => {
                 match opcode {
-                    0x00E0 => self.pixels = vec![vec![false; WIDTH]; HEIGHT], // clears the screen
+                    0x00E0 => {
+                        self.pixels = vec![vec![false; WIDTH]; HEIGHT]; // clears the screen
+                        self.pixels_dirty = true;
+                    },
                     0x00EE => self.pc = self.stack.pop().expect("Stack should not be empty"), // return from a subroutine
                     unsopported => panic!("Unsopported opcode {:#06x}", unsopported),
                 }
@@ -122,7 +180,7 @@ impl Game {
             0x7 => {
                 // 7XNN - VX += NN
                 let reg = &mut self.regs[(opcode as usize & 0x0F00) >> 8];
-                *reg += (opcode & 0x00FF) as u8;
+                *reg = reg.wrapping_add((opcode & 0x00FF) as u8)
             },
             0x8 => {
                 // 8XYO - perform operation - on VX and VY
@@ -146,7 +204,7 @@ impl Game {
                         let before_sub = *reg_x;
                         let result = reg_x.wrapping_sub(reg_y);
                         *reg_x = result;
-                        self.regs[15] = if before_sub > reg_y { 1 } else { 0 };
+                        self.regs[15] = if before_sub >= reg_y { 1 } else { 0 };
                     },
                     0x6 => {
                         // 8XY6 - VX >>= 1. VF is set to LSB of VX before shift
@@ -159,13 +217,13 @@ impl Game {
                         let before_add = *reg_x;
                         let result = reg_y.wrapping_sub(*reg_x);
                         *reg_x = result;
-                        self.regs[15] = if reg_y > before_add { 1 } else { 0 };
+                        self.regs[15] = if reg_y >= before_add { 1 } else { 0 };
                     },
                     0xE => {
                         // 8XYE - VX <<= 1. VF is set to MSB of VX before shift
                         let before_shift = *reg_x;
                         *reg_x <<= 1;
-                        self.regs[15] = before_shift & 0b1000_0000;
+                        self.regs[15] = (before_shift & 0b1000_0000) >> 7;
                     },
                     _ => panic!("Unsopported opcode {:#06x}", opcode),
                 };
@@ -206,6 +264,11 @@ impl Game {
                         
                         if sprite_pixel != screen_pixel {
                             self.pixels[row_i + row][col_i + col] = true;
+                            self.pixels_dirty = true;
+                        }
+                        else {
+                            self.pixels[row_i + row][col_i + col] = false;
+                            self.pixels_dirty = true;
                         }
 
                         // if gone from set to unset then set VF to 1
@@ -217,63 +280,207 @@ impl Game {
             },
             0xE => {
                 match opcode & 0x00FF {
-                    0x9E => {}, // TODO: Keyboard
-                    0xA1 => {}, // TODO: Keyboard
+                    0x9E => {
+                        // EX9E - skip next instruction if key in VX pressed
+                        let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
+                        if self.is_key_pressed(key_ctx, reg) {
+                            self.pc += 2;
+                        }
+                    },
+                    0xA1 => {
+                        // EXA1 - skip next instruction if key in VX not pressed
+                        let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
+                        if !self.is_key_pressed(key_ctx, reg) {
+                            self.pc += 2;
+                        }
+                    },
                     _ => panic!("Unsopported opcode {:#06x}", opcode),
                 }
             },
             0xF => {
                 match opcode & 0x00FF {
-                    0x07 => {}, // TODO: Timer
-                    0x0A => {}, // TODO: Keyboard
-                    0x15 => {}, // TODO: Timer
-                    0x18 => {}, // TODO: Timer
+                    0x07 => {
+                        // FX07 - Sets VX to delay timer
+                        let reg = &mut self.regs[(opcode as usize & 0x0F00) >> 8];
+                        *reg = self.delay_timer;
+                    },
+                    0x0A => {
+                        // FX0A - Get key. Blocking instruction. Waits for key input and then puts it in VX. However, timers should still decrement
+                        if let Some(key) = self.get_key_input(&key_ctx) {
+                            let reg = &mut self.regs[(opcode as usize & 0x0F00) >> 8];
+                            *reg = key;
+                        }
+                        else {
+                            self.pc -= 2;
+                        }
+                    }, // TODO: Keyboard
+                    0x15 => {
+                        // FX15 - Delay timer = VX
+                        let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
+                        self.delay_timer = reg;
+                    },
+                    0x18 => {
+                        // FX18 - Sound timer = VX
+                        let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
+                        self.sound_timer = reg;
+                    },
                     0x1E => {
                         // FX1E - I += VX. VF not affected
                         let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
                         self.addr_reg += reg as u16;
                     },
-                    0x29 => {}, // TODO: Sprites  
-                    0x33 => {}, // TODO: BCD
-                    0x55 => {}, // TODO: Reg dump
-                    0x65 => {}, // TODO: Reg load
+                    0x29 => {
+                        // FX29 - I = addr of hex character in VX
+                        let reg = self.regs[(opcode as usize & 0x0F00) >> 8] as u16;
+                        self.addr_reg = FONT_START as u16 + reg * 5;
+                    },
+                    0x33 => {
+                        // FX33 - Store BCD of VX in I. I is hundreds. I + 1 tens. I + 2 units.
+                        let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
+                        let mut bcd: u32 = reg as u32;
+
+                        for _ in 0..8 {
+                            if bcd & 0x00F00 >= 0x00500 {
+                                bcd += 0x00300;
+                            }
+                            if bcd & 0x0F000 >= 0x05000 {
+                                bcd += 0x03000;
+                            }
+                            if bcd & 0xF0000 >= 0x50000 {
+                                bcd += 0x30000;
+                            }
+                            bcd <<= 1;
+                        }
+
+                        self.memory[self.addr_reg as usize] = ((bcd & 0xF0000) >> 16) as u8;
+                        self.memory[self.addr_reg as usize + 1] = ((bcd & 0x0F000) >> 12) as u8;
+                        self.memory[self.addr_reg as usize + 2] = ((bcd & 0x00F00) >> 8) as u8;
+                    },
+                    0x55 => {
+                        // FX55 - Dump regs V0 - VX(inclusive) to I - I + X. I is unmodified
+                        let total_regs = ((opcode & 0x0F00) >> 8) + 1;
+                        
+                        for i in 0..total_regs {
+                            self.memory[(self.addr_reg + i) as usize] = self.regs[(i) as usize];
+                        }
+                    },
+                    0x65 => {
+                        // FX65 - Load regs V0 - VX(inclusive) from I - I + X. I is unmodified
+                        let total_regs = ((opcode & 0x0F00) >> 8) + 1;
+                        
+                        for i in 0..total_regs {
+                            self.regs[(i) as usize] = self.memory[(self.addr_reg + i) as usize];
+                        }
+                    },
                     _ => panic!("Unsopported opcode {:#06x}", opcode),
                 }
             },
             _ => panic!("should only be a nibble"),
         };
     }
+
+    fn is_key_pressed(&self, key_ctx: &KeyboardContext, key: u8) -> bool {
+        let keycode = match key {
+            0x1 => KeyCode::Key1,
+            0x2 => KeyCode::Key2,
+            0x3 => KeyCode::Key3,
+            0xC => KeyCode::Key4,
+            0x4 => KeyCode::Q,
+            0x5 => KeyCode::W,
+            0x6 => KeyCode::E,
+            0xD => KeyCode::R,
+            0x7 => KeyCode::A,
+            0x8 => KeyCode::S,
+            0x9 => KeyCode::D,
+            0xE => KeyCode::F,
+            0xA => KeyCode::Z,
+            0x0 => KeyCode::X,
+            0xB => KeyCode::C,
+            0xF => KeyCode::V,
+            unknown => panic!("{unknown} is not a valid CHIP-8 key"),
+        };
+        key_ctx.is_key_pressed(keycode)
+    }
+
+    fn get_key_input(&self, key_ctx: &KeyboardContext) -> Option<u8> {
+        let pressed = key_ctx.pressed_keys();
+
+        for key in pressed {
+            match key {
+                KeyCode::Key1 => return Some(0x1),
+                KeyCode::Key2 => return Some(0x2),
+                KeyCode::Key3 => return Some(0x3),
+                KeyCode::Key4 => return Some(0xC),
+                KeyCode::Q  => return Some(0x4),
+                KeyCode::W  => return Some(0x5),
+                KeyCode::E  => return Some(0x6),
+                KeyCode::R  => return Some(0xD),
+                KeyCode::A  => return Some(0x7),
+                KeyCode::S  => return Some(0x8),
+                KeyCode::D  => return Some(0x9),
+                KeyCode::F  => return Some(0xE),
+                KeyCode::Z  => return Some(0xA),
+                KeyCode::X  => return Some(0x0),
+                KeyCode::C  => return Some(0xB),
+                KeyCode::V  => return Some(0xF),
+                _ => {},
+            };
+        }
+
+        None 
+    }
 }
 
 impl EventHandler for Game {
-    fn update(&mut self, _ctx: &mut Context) -> GameResult {
-        self.handle_opcode();
+    fn update(&mut self, ctx: &mut Context) -> GameResult {
+        if self.delay_timer > 0 {
+            self.delay_timer -= 1;
+        }
+        if self.sound_timer > 0 {
+            self.sound_timer -= 1;
+            if !self.beep_sound.playing() {
+                self.beep_sound.play(&ctx.audio)?;
+            }
+        }
+        else {
+            self.beep_sound.pause();
+        }
+
+        for _ in 0..12 {
+            self.handle_opcode(&ctx.keyboard);
+            
+            if ctx.time.ticks() % 100 == 0 {
+                println!("Delta frame time: {:?} ", ctx.time.delta());
+                println!("Average FPS: {}", ctx.time.fps());
+            }
+        }
+
         Ok(())
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
+        if !self.pixels_dirty {
+            return Ok(());
+        }
+
         let mut canvas = graphics::Canvas::from_frame(ctx, Color::BLACK);
-        
+        self.pixels_batch.clear();
+
         for (col_i, row) in self.pixels.iter().enumerate() {
             for (row_i, pixel) in row.iter().enumerate() {
                 if *pixel {
-                    let pixel_rect = Rect::new_i32(
-                        row_i as i32 * PIXEL_WIDTH,
-                        col_i as i32 * PIXEL_HEIGHT,
-                        PIXEL_WIDTH,
-                        PIXEL_HEIGHT,
-                    );
-
-                    canvas.draw(
-                        &Quad,
+                    self.pixels_batch.push(
                         DrawParam::new()
-                            .dest_rect(pixel_rect)
-                            .color(Color::WHITE)
+                        .dest(Vec2::new(row_i as f32 * PIXEL_SIZE, col_i as f32 * PIXEL_SIZE))
+                        //.scale(Vec2::new(PIXEL_WIDTH, PIXEL_HEIGHT))
                     );
                 }
             }
         }
-        
+
+        self.pixels_dirty = false;
+
+        canvas.draw(&self.pixels_batch, DrawParam::new());
         canvas.finish(ctx)
     }
 }

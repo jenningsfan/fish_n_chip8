@@ -19,7 +19,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["./roms/sprite-test.ch8"],
+            "args": ["./roms/3-corax+.ch8"],
             "cwd": "${workspaceFolder}"
         },
         {
