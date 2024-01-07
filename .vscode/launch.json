@@ -19,7 +19,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["./roms/3-corax+.ch8"],
+            "args": ["./roms/tests/6-keypad.ch8"],
             "cwd": "${workspaceFolder}"
         },
         {

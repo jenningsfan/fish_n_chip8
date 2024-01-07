@@ -4,11 +4,12 @@ use ggez::conf::WindowSetup;
 use ggez::event::{self, EventHandler};
 use ggez::glam::Vec2;
 use ggez::graphics::{self, Color, DrawParam, Image, InstanceArray};
-use ggez::input::keyboard::{KeyCode, KeyboardContext};
+use ggez::input::keyboard::{KeyCode, KeyboardContext, KeyInput};
 
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
 
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path;
@@ -74,6 +75,9 @@ struct Game {
     delay_timer: u8,
     sound_timer: u8,
     beep_sound: Source,
+    pressed_key: Option<u8>,
+    ignore_keys: HashSet<u8>,
+    waiting_for_key_press: bool,
     memory: Vec<u8>,
     stack: Vec<u16>,
     regs: [u8; 16],
@@ -99,6 +103,9 @@ impl Game {
             delay_timer: 0,
             sound_timer: 0,
             beep_sound: audio::Source::new(ctx, "/beep.wav").unwrap(),
+            pressed_key: None,
+            waiting_for_key_press: false,
+            ignore_keys: HashSet::new(),
             memory: vec![0; RAM_SIZE],
             stack: vec![],
             regs: [0; 16],
@@ -124,67 +131,72 @@ impl Game {
 
     fn handle_opcode(&mut self, key_ctx: &KeyboardContext) {
         let opcode = self.load_opcode(self.pc);
+        let opcode_type = (opcode & 0xF000) >> 12;        // TAAA
+        let reg_x = (opcode as usize & 0x0F00) >> 8;    // AXAA
+        let reg_y = (opcode as usize & 0x00F0) >> 4;    // AAYA
+        let nnn = opcode & 0x0FFF;                        // ANNN
+        let nn = (opcode & 0x00FF) as u8;                         // AANN
+        let n = (opcode & 0x000F) as u8;                          // AAAN
+
         self.pc += 2;
 
-        match (opcode & 0xF000) >> 12 {
+        match opcode_type {
             0x0 => {
                 match opcode {
                     0x00E0 => {
-                        self.pixels = vec![vec![false; WIDTH]; HEIGHT]; // clears the screen
+                        // 00E0 - clear screen
+                        self.pixels = vec![vec![false; WIDTH]; HEIGHT];
                         self.pixels_dirty = true;
                     }
-                    0x00EE => self.pc = self.stack.pop().expect("Stack should not be empty"), // return from a subroutine
+                    0x00EE => self.pc = {
+                        // 00EE - return from a subroutine
+                        self.stack.pop().expect("Stack should not be empty")
+                    },
                     unsopported => panic!("Unsopported opcode {:#06x}", unsopported),
                 }
             }
             0x1 => {
                 // 1NNN - Jumps to address NNN
-                self.pc = opcode & 0x0FFF;
+                self.pc = nnn;
             }
             0x2 => {
                 // 2NNN - call subroutine
-                let addr = opcode & 0x0FFF;
                 self.stack.push(self.pc);
-                self.pc = addr;
+                self.pc = nnn;
             }
             0x3 => {
                 // 3XNN - skip next instruction if VX == NN
-                let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
-                if reg as u16 == opcode & 0x00FF {
+                if self.regs[reg_x] == nn {
                     self.pc += 2;
                 }
             }
             0x4 => {
                 // 4XNN - skip next instruction if VX != NN
-                let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
-                if reg as u16 != opcode & 0x00FF {
+                if self.regs[reg_x] != nn {
                     self.pc += 2;
                 }
             }
             0x5 => {
                 // 5XY0 - skip next instruction if VX == VY
-                let reg_x = self.regs[(opcode as usize & 0x0F00) >> 8];
-                let reg_y = self.regs[(opcode as usize & 0x00F0) >> 4];
-                if reg_x == reg_y {
+                if self.regs[reg_x] == self.regs[reg_y] {
                     self.pc += 2;
                 }
             }
             0x6 => {
                 // 6XNN - sets VX to NN
-                let reg = &mut self.regs[(opcode as usize & 0x0F00) >> 8];
-                *reg = (opcode & 0x00FF) as u8;
+                self.regs[reg_x] = nn;
             }
             0x7 => {
                 // 7XNN - VX += NN
-                let reg = &mut self.regs[(opcode as usize & 0x0F00) >> 8];
-                *reg = reg.wrapping_add((opcode & 0x00FF) as u8)
+                self.regs[reg_x] = (self.regs[reg_x]).wrapping_add(nn);
             }
             0x8 => {
                 // 8XYO - perform operation - on VX and VY
-                let reg_y = self.regs[(opcode as usize & 0x00F0) >> 4];
-                let reg_x = &mut self.regs[(opcode as usize & 0x0F00) >> 8];
+                let reg_y = self.regs[reg_y];
+                let reg_x = &mut self.regs[reg_x];
 
-                match opcode & 0x000F {
+                match n {
+                    // 8XY0 - 8XY3 are fairly self-explanatory
                     0x0 => *reg_x = reg_y,
                     0x1 => *reg_x |= reg_y,
                     0x2 => *reg_x &= reg_y,
@@ -227,27 +239,23 @@ impl Game {
             }
             0x9 => {
                 // 9XY0 - skip next instruction if VX != VY
-                let reg_x = self.regs[(opcode as usize & 0x0F00) >> 8];
-                let reg_y = self.regs[(opcode as usize & 0x00F0) >> 4];
-                if reg_x != reg_y {
+                if self.regs[reg_x] != self.regs[reg_y] {
                     self.pc += 2;
                 }
             }
-            0xA => self.addr_reg = opcode & 0x0FFF, // ANNN - sets I to NNN
-            0xB => self.pc = self.regs[0] as u16 + opcode as u16 & 0x0FFF, // BXNN jump to NNN + V0
+            0xA => self.addr_reg = nnn, // ANNN - sets I to NNN
+            0xB => self.pc = self.regs[0] as u16 + nnn, // BXNN jump to NNN + V0
             0xC => {
                 // CXNN - VX = rand & NN; rand 0-255
-                let result = self.rng.gen::<u8>() & (opcode & 0x00FF) as u8;
-                let reg = &mut self.regs[(opcode as usize & 0x0F00) >> 8];
-                *reg = result;
+                self.regs[reg_x] = self.rng.gen::<u8>() & nn;
             }
             0xD => {
                 // DXYN - Draw sprit to coord (VX, VY) - width 8 pixels, height N pixels.
                 //        Read from memory location I. VF set to 1 if any pixels erased
-                let col = self.regs[(opcode as usize & 0x0F00) >> 8] as usize;
-                let row = self.regs[(opcode as usize & 0x00F0) >> 4] as usize;
-                let rows = opcode & 0x000F;
-                let sprite = &self.memory[self.addr_reg as usize..(self.addr_reg + rows) as usize];
+                let col = self.regs[reg_x] as usize;
+                let row = self.regs[reg_y] as usize;
+                let rows = n;
+                let sprite = &self.memory[self.addr_reg as usize..(self.addr_reg + rows as u16) as usize];
                 self.regs[15] = 0;
 
                 for (row_i, sprite_row) in sprite.iter().enumerate() {
@@ -278,15 +286,13 @@ impl Game {
                 match opcode & 0x00FF {
                     0x9E => {
                         // EX9E - skip next instruction if key in VX pressed
-                        let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
-                        if self.is_key_pressed(key_ctx, reg) {
+                        if self.is_key_pressed(key_ctx, self.regs[reg_x]) {
                             self.pc += 2;
                         }
                     }
                     0xA1 => {
                         // EXA1 - skip next instruction if key in VX not pressed
-                        let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
-                        if !self.is_key_pressed(key_ctx, reg) {
+                        if !self.is_key_pressed(key_ctx, self.regs[reg_x]) {
                             self.pc += 2;
                         }
                     }
@@ -294,45 +300,48 @@ impl Game {
                 }
             }
             0xF => {
-                match opcode & 0x00FF {
+                match nn {
                     0x07 => {
-                        // FX07 - Sets VX to delay timer
-                        let reg = &mut self.regs[(opcode as usize & 0x0F00) >> 8];
-                        *reg = self.delay_timer;
+                        // FX07 - Sets VX to delay time
+                        self.regs[reg_x] = self.delay_timer;
                     }
                     0x0A => {
                         // FX0A - Get key. Blocking instruction. Waits for key input and then puts it in VX. However, timers should still decrement
-                        if let Some(key) = self.get_key_input(&key_ctx) {
-                            let reg = &mut self.regs[(opcode as usize & 0x0F00) >> 8];
-                            *reg = key;
-                        } else {
+                        if self.pressed_key == None {
+                            if !self.waiting_for_key_press {
+                                self.ignore_keys = self.get_key_input(&key_ctx);
+                                self.waiting_for_key_press = true;
+                            }
+
                             self.pc -= 2;
                         }
-                    } // TODO: Keyboard
+                        else if let Some(key) = self.pressed_key {
+                            self.regs[reg_x] = key;
+                            self.ignore_keys = HashSet::new();
+                            self.pressed_key = None;
+                            self.waiting_for_key_press = false;
+                        }
+                    }
                     0x15 => {
                         // FX15 - Delay timer = VX
-                        let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
-                        self.delay_timer = reg;
+                        self.delay_timer = self.regs[reg_x];
                     }
                     0x18 => {
                         // FX18 - Sound timer = VX
-                        let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
-                        self.sound_timer = reg;
+                        self.sound_timer = self.regs[reg_x];
                     }
                     0x1E => {
                         // FX1E - I += VX. VF not affected
-                        let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
-                        self.addr_reg += reg as u16;
+                        self.addr_reg += self.regs[reg_x] as u16;
                     }
                     0x29 => {
                         // FX29 - I = addr of hex character in VX
-                        let reg = self.regs[(opcode as usize & 0x0F00) >> 8] as u16;
+                        let reg = self.regs[reg_x] as u16;
                         self.addr_reg = FONT_START as u16 + reg * 5;
                     }
                     0x33 => {
                         // FX33 - Store BCD of VX in I. I is hundreds. I + 1 tens. I + 2 units.
-                        let reg = self.regs[(opcode as usize & 0x0F00) >> 8];
-                        let mut bcd: u32 = reg as u32;
+                        let mut bcd: u32 = self.regs[reg_x] as u32;
 
                         for _ in 0..8 {
                             if bcd & 0x00F00 >= 0x00500 {
@@ -353,7 +362,7 @@ impl Game {
                     }
                     0x55 => {
                         // FX55 - Dump regs V0 - VX(inclusive) to I - I + X. I is unmodified
-                        let total_regs = ((opcode & 0x0F00) >> 8) + 1;
+                        let total_regs = reg_x as u16 + 1;
 
                         for i in 0..total_regs {
                             self.memory[(self.addr_reg + i) as usize] = self.regs[(i) as usize];
@@ -361,10 +370,10 @@ impl Game {
                     }
                     0x65 => {
                         // FX65 - Load regs V0 - VX(inclusive) from I - I + X. I is unmodified
-                        let total_regs = ((opcode & 0x0F00) >> 8) + 1;
+                        let total_regs = reg_x as u16 + 1;
 
                         for i in 0..total_regs {
-                            self.regs[(i) as usize] = self.memory[(self.addr_reg + i) as usize];
+                            self.regs[i as usize] = self.memory[(self.addr_reg + i) as usize];
                         }
                     }
                     _ => panic!("Unsopported opcode {:#06x}", opcode),
@@ -397,36 +406,59 @@ impl Game {
         key_ctx.is_key_pressed(keycode)
     }
 
-    fn get_key_input(&self, key_ctx: &KeyboardContext) -> Option<u8> {
-        let pressed = key_ctx.pressed_keys();
+    fn key_for_keycode(&self, keycode: &KeyCode) -> Option<u8> {
+        match *keycode {
+            KeyCode::Key1 => return Some(0x1),
+            KeyCode::Key2 => return Some(0x2),
+            KeyCode::Key3 => return Some(0x3),
+            KeyCode::Key4 => return Some(0xC),
+            KeyCode::Q => return Some(0x4),
+            KeyCode::W => return Some(0x5),
+            KeyCode::E => return Some(0x6),
+            KeyCode::R => return Some(0xD),
+            KeyCode::A => return Some(0x7),
+            KeyCode::S => return Some(0x8),
+            KeyCode::D => return Some(0x9),
+            KeyCode::F => return Some(0xE),
+            KeyCode::Z => return Some(0xA),
+            KeyCode::X => return Some(0x0),
+            KeyCode::C => return Some(0xB),
+            KeyCode::V => return Some(0xF),
+            _ => return None,
+        };
+    }
 
+    fn get_key_input(&self, key_ctx: &KeyboardContext) -> HashSet<u8> {
+        let pressed = key_ctx.pressed_keys();
+        let mut pressed_nums: HashSet<u8> = HashSet::new();
+        
         for key in pressed {
-            match key {
-                KeyCode::Key1 => return Some(0x1),
-                KeyCode::Key2 => return Some(0x2),
-                KeyCode::Key3 => return Some(0x3),
-                KeyCode::Key4 => return Some(0xC),
-                KeyCode::Q => return Some(0x4),
-                KeyCode::W => return Some(0x5),
-                KeyCode::E => return Some(0x6),
-                KeyCode::R => return Some(0xD),
-                KeyCode::A => return Some(0x7),
-                KeyCode::S => return Some(0x8),
-                KeyCode::D => return Some(0x9),
-                KeyCode::F => return Some(0xE),
-                KeyCode::Z => return Some(0xA),
-                KeyCode::X => return Some(0x0),
-                KeyCode::C => return Some(0xB),
-                KeyCode::V => return Some(0xF),
-                _ => {}
-            };
+            if let Some(key) = self.key_for_keycode(key) {
+                pressed_nums.insert(key);
+            }
         }
 
-        None
+        pressed_nums
     }
 }
 
 impl EventHandler for Game {
+    fn key_up_event(&mut self, _ctx: &mut Context, input: KeyInput) -> GameResult {
+        if !self.waiting_for_key_press {
+            return Ok(());
+        }
+
+        let key = self.key_for_keycode(&input.keycode.unwrap());
+
+        if let Some(key) = key  {
+            if !self.ignore_keys.remove(&key) {
+                self.pressed_key = Some(key);
+            }
+        }
+
+        Ok(())
+    }
+
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         if self.delay_timer > 0 {
             self.delay_timer -= 1;
@@ -467,7 +499,7 @@ impl EventHandler for Game {
                         DrawParam::new().dest(Vec2::new(
                             row_i as f32 * PIXEL_SIZE,
                             col_i as f32 * PIXEL_SIZE,
-                        )), //.scale(Vec2::new(PIXEL_WIDTH, PIXEL_HEIGHT))
+                        )),
                     );
                 }
             }
