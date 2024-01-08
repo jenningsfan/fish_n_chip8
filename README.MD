@@ -6,8 +6,8 @@ fish_n_chip8 is a CHIP-8 emulator written in rust using the [ggez](https://crate
 - [X] Fixed size display
 - [X] Fixed keyboard layout
 - [X] Sound
-- [] SUPER-CHIP extensions
-- [] XO-CHIP extensions
-- [] Configurable quirks
-- [] GUI
-- [] Debugger
+- [ ] SUPER-CHIP extensions
+- [ ] XO-CHIP extensions
+- [ ] Configurable quirks
+- [ ] GUI
+- [ ] Debugger
