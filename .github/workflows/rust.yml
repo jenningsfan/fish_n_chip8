@@ -23,14 +23,14 @@ jobs:
         run: sudo apt install libasound2-dev libudev-dev pkg-config
 
       - name: Build
-        run: cargo build --all --release && strip target/release/PROJECT_NAME && mv target/release/PROJECT_NAME target/release/PROJECT_NAME_amd64
+        run: cargo build --all --release && strip target/release/fish_n_chip8 && mv target/release/fish_n_chip8 target/release/fish_n_chip8_amd64
 
       - name: Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            target/release/PROJECT_NAME_amd64
+            target/release/fish_n_chip8_amd64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -55,7 +55,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: target/release/PROJECT_NAME.exe
+          files: target/release/fish_n_chip8.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -75,13 +75,13 @@ jobs:
 #          override: true
 #
 #      - name: Build for mac
-#        run: cargo build --all --release && strip target/release/PROJECT_NAME && mv target/release/PROJECT_NAME target/release/PROJECT_NAME_darwin
+#        run: cargo build --all --release && strip target/release/fish_n_chip8 && mv target/release/fish_n_chip8 target/release/fish_n_chip8_darwin
 #
 #      - name: Release
 #        uses: softprops/action-gh-release@v1
 #        if: startsWith(github.ref, 'refs/tags/')
 #        with:
 #          files: |
-#            target/release/PROJECT_NAME_darwin
+#            target/release/fish_n_chip8_darwin
 #        env:
 #          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
