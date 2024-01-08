@@ -9,47 +9,19 @@ use ggez::input::keyboard::{KeyCode, KeyboardContext, KeyInput};
 use std::collections::HashSet;
 use std::{env, path, fs};
 
-use crate::cpu::{CPU, Chip8IO};
-
-const WIDTH: usize = 64;
-const HEIGHT: usize = 32;
+use crate::cpu::{self, CPU};
 
 const PIXEL_SIZE: f32 = 16.0;
-pub const SCREEN_SIZE: (f32, f32) = (WIDTH as f32 * PIXEL_SIZE, HEIGHT as f32 * PIXEL_SIZE);
+pub const SCREEN_SIZE: (f32, f32) = (cpu::WIDTH as f32 * PIXEL_SIZE, cpu::HEIGHT as f32 * PIXEL_SIZE);
 
-const RAM_SIZE: usize = 4096;
-
-const FONT_DATA: [u8; 5 * 16] = [
-    0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
-    0x20, 0x60, 0x20, 0x20, 0x70, // 1
-    0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
-    0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
-    0x90, 0x90, 0xF0, 0x10, 0x10, // 4
-    0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
-    0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
-    0xF0, 0x10, 0x20, 0x40, 0x40, // 7
-    0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
-    0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
-    0xF0, 0x90, 0xF0, 0x90, 0x90, // A
-    0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
-    0xF0, 0x80, 0x80, 0x80, 0xF0, // C
-    0xE0, 0x90, 0x90, 0x90, 0xE0, // D
-    0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
-    0xF0, 0x80, 0xF0, 0x80, 0x80, // F
-];
-
-const FONT_START: usize = 0x50;
-const FONT_END: usize = FONT_START + FONT_DATA.len();
-
-pub struct EmulatorIO<'a> {
+pub struct EmulatorIO {
     pixels_batch: InstanceArray,
-    pixels_dirty: bool,
     beep_sound: Source,
-    cpu: Option<CPU<'a>>,
+    cpu: CPU,
 }
 
-impl EmulatorIO<'_> {
-    pub fn new<'a>(ctx: &'a mut Context, rom_path: String) -> EmulatorIO<'a> {
+impl EmulatorIO {
+    pub fn new(ctx: &mut Context, rom_path: String) -> EmulatorIO {
         let pixel_rect = Image::from_color(
             &ctx.gfx,
             PIXEL_SIZE as u32,
@@ -60,42 +32,16 @@ impl EmulatorIO<'_> {
 
         let mut created = EmulatorIO {
             pixels_batch,
-            pixels_dirty: false,
             beep_sound: audio::Source::new(ctx, "/beep.wav").unwrap(),
-            cpu: None,
+            cpu: CPU::new(),
         };
 
         created.beep_sound.set_repeat(true);
 
-        let mut cpu = CPU::new(&mut created);
         let rom = fs::read(rom_path).unwrap(); // TODO: Error Handling
-        cpu.load_rom(&rom);
-        created.cpu = Some(cpu);
+        created.cpu.load_rom(&rom);
 
         created
-    }
-
-    fn is_key_pressed(&self, key_ctx: &KeyboardContext, key: u8) -> bool {
-        let keycode = match key {
-            0x1 => KeyCode::Key1,
-            0x2 => KeyCode::Key2,
-            0x3 => KeyCode::Key3,
-            0xC => KeyCode::Key4,
-            0x4 => KeyCode::Q,
-            0x5 => KeyCode::W,
-            0x6 => KeyCode::E,
-            0xD => KeyCode::R,
-            0x7 => KeyCode::A,
-            0x8 => KeyCode::S,
-            0x9 => KeyCode::D,
-            0xE => KeyCode::F,
-            0xA => KeyCode::Z,
-            0x0 => KeyCode::X,
-            0xB => KeyCode::C,
-            0xF => KeyCode::V,
-            unknown => panic!("{unknown} is not a valid CHIP-8 key"),
-        };
-        key_ctx.is_key_pressed(keycode)
     }
 
     fn key_for_keycode(&self, keycode: &KeyCode) -> Option<u8> {
@@ -134,12 +80,12 @@ impl EmulatorIO<'_> {
     }
 }
 
-impl EventHandler for EmulatorIO<'_> {
+impl EventHandler for EmulatorIO {
     fn key_up_event(&mut self, _ctx: &mut Context, input: KeyInput) -> GameResult {
         let key = self.key_for_keycode(&input.keycode.unwrap());
 
         if let Some(key) = key  {
-            self.cpu.as_mut().unwrap().key_released(key);
+            self.cpu.key_released(key);
         }
 
         Ok(())
@@ -147,11 +93,8 @@ impl EventHandler for EmulatorIO<'_> {
 
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         let pressed_keys = self.get_pressed_keys(&ctx.keyboard);
-        let cpu = self.cpu.as_mut().unwrap();
 
-        let beep = cpu.timer_tick();
-
-        if beep && !self.beep_sound.playing() {
+        if self.cpu.timer_tick() && !self.beep_sound.playing() {
             self.beep_sound.play(&ctx.audio)?;
         }
         else {
@@ -159,7 +102,7 @@ impl EventHandler for EmulatorIO<'_> {
         }
 
         for _ in 0..12 {
-            cpu.handle_opcode(&pressed_keys);
+            self.cpu.handle_opcode(&pressed_keys);
 
             if ctx.time.ticks() % 100 == 0 {
                 println!("Delta frame time: {:?} ", ctx.time.delta());
@@ -171,16 +114,14 @@ impl EventHandler for EmulatorIO<'_> {
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
-        let cpu = self.cpu.as_mut().unwrap();
-
-        if !self.pixels_dirty {
+        if !self.cpu.pixels_dirty {
             return Ok(());
         }
 
         let mut canvas = graphics::Canvas::from_frame(ctx, Color::BLACK);
         self.pixels_batch.clear();
 
-        for (col_i, row) in cpu.pixels.iter().enumerate() {
+        for (col_i, row) in self.cpu.pixels.iter().enumerate() {
             for (row_i, pixel) in row.iter().enumerate() {
                 if *pixel {
                     self.pixels_batch.push(
@@ -193,16 +134,10 @@ impl EventHandler for EmulatorIO<'_> {
             }
         }
 
-        self.pixels_dirty = false;
+        self.cpu.pixels_dirty = false;
 
         canvas.draw(&self.pixels_batch, DrawParam::new());
         canvas.finish(ctx)
-    }
-}
-
-impl Chip8IO for EmulatorIO<'_> {
-    fn redraw(&mut self) {
-        self.pixels_dirty = true;
     }
 }
 

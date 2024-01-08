@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use rand::rngs::ThreadRng;
 use rand::{thread_rng, Rng};
 
-const WIDTH: usize = 64;
-const HEIGHT: usize = 32;
+pub const WIDTH: usize = 64;
+pub const HEIGHT: usize = 32;
 
 const RAM_SIZE: usize = 4096;
 
@@ -30,12 +30,9 @@ const FONT_DATA: [u8; 5 * 16] = [
 const FONT_START: usize = 0x50;
 const FONT_END: usize = FONT_START + FONT_DATA.len();
 
-pub trait Chip8IO {
-    fn redraw(&mut self);
-}
-
-pub struct CPU<'a> {
+pub struct CPU {
     pub pixels: [[bool; WIDTH]; HEIGHT],
+    pub pixels_dirty: bool,
     memory: [u8; RAM_SIZE],
     delay_timer: u8,
     sound_timer: u8,
@@ -47,13 +44,13 @@ pub struct CPU<'a> {
     addr_reg: u16,
     pc: u16,
     rng: ThreadRng,
-    io: &'a mut dyn Chip8IO,
 }
 
-impl<'a> CPU<'a> {
-    pub fn new(io: &'a mut impl Chip8IO) -> CPU<'a> {
+impl CPU {
+    pub fn new() -> CPU {
         let mut created = Self {
             pixels: [[false; WIDTH]; HEIGHT],
+            pixels_dirty: true,
             memory: [0; RAM_SIZE],
             delay_timer: 0,
             sound_timer: 0,
@@ -65,7 +62,6 @@ impl<'a> CPU<'a> {
             addr_reg: 0,
             pc: 0x200,
             rng: thread_rng(),
-            io,
         };
 
         created.memory[FONT_START..FONT_END].copy_from_slice(&FONT_DATA);
@@ -112,7 +108,7 @@ impl<'a> CPU<'a> {
                     0x00E0 => {
                         // 00E0 - clear screen
                         self.pixels = [[false; WIDTH]; HEIGHT];
-                        self.io.redraw();
+                        self.pixels_dirty = true;
                     }
                     0x00EE => self.pc = {
                         // 00EE - return from a subroutine
@@ -235,10 +231,10 @@ impl<'a> CPU<'a> {
 
                         if sprite_pixel != screen_pixel {
                             self.pixels[row_i + row][col_i + col] = true;
-                            self.io.redraw();
+                            self.pixels_dirty = true;
                         } else {
                             self.pixels[row_i + row][col_i + col] = false;
-                            self.io.redraw();
+                            self.pixels_dirty = true;
                         }
 
                         // if gone from set to unset then set VF to 1
