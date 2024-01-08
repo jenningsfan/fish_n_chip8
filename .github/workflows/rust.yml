@@ -5,7 +5,7 @@ name: Rust
 on: [push]
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
 
     steps:
@@ -20,7 +20,7 @@ jobs:
           override: true
 
       - name: Install dependent packages
-        run: apt install libasound2-dev libudev-dev pkg-config
+        run: sudo apt install libasound2-dev libudev-dev pkg-config
 
       - name: Build
         run: cargo build --all --release && strip target/release/PROJECT_NAME && mv target/release/PROJECT_NAME target/release/PROJECT_NAME_amd64
