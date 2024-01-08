@@ -25,14 +25,12 @@ jobs:
       - name: Build
         run: cargo build --all --release && strip target/release/fish_n_chip8 && mv target/release/fish_n_chip8 target/release/fish_n_chip8_amd64
 
-      - name: Release
-        uses: softprops/action-gh-release@v1
+      - name: Upload Release Asset
         if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: |
-            target/release/fish_n_chip8_amd64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |          
+            gh release upload ${{ github.ref }} target/release/fish_n_chip8_amd64
 
   build-win:
     runs-on: windows-latest
@@ -50,14 +48,13 @@ jobs:
 
       - name: Build
         run: cargo build --all --release
-
-      - name: Release
-        uses: softprops/action-gh-release@v1
+      
+      - name: Upload Release Asset
         if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: target/release/fish_n_chip8.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |          
+            gh release upload ${{ github.ref }} target/release/fish_n_chip8.exe
 
 #  build-mac:
 #    runs-on: macos-latest
