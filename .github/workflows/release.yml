@@ -26,9 +26,10 @@ jobs:
         run: |
           cargo build --all --release
           strip target/release/fish_n_chip8
-          mv target/release/fish_n_chip8 target/release/fish_n_chip8_amd64
-          mv resources/ linux-release/resources/
-          mv roms/ linux-release/roms/
+          mkdir linux-release
+          cp target/release/fish_n_chip8 linux-release/fish_n_chip8_amd64
+          cp -r resources/ linux-release/resources/
+          cp -r roms/ linux-release/roms/
           tar -cvzf linux-release.tar.gz linux-release
 
       - name: Debug
@@ -58,9 +59,9 @@ jobs:
         run: |
           cargo build --all --release
           mkdir win64-release
-          mv target/release/fish_n_chip8.exe win64-release/fish_n_chip8.exe
-          mv resources/ win64-release/resources/
-          mv roms/ win64-release/roms/
+          Copy-Item target/release/fish_n_chip8.exe -Destination win64-release/fish_n_chip8.exe
+          Copy-Item resources -Destination win64-release -Recurse
+          Copy-Item roms -Destination win64-release -Recurse
           Compress-Archive win64-release win64-release.zip
           
       - name: Debug

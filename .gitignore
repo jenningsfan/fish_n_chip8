@@ -4,3 +4,7 @@
 *.bak
 /binaries/
 binaries.zip
+/win64-release
+/linux-release
+win64-release.zip
+linux-release.tar.gz
