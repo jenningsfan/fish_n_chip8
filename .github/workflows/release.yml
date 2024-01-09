@@ -38,7 +38,7 @@ jobs:
       - name: Upload Release Asset
         uses: AButler/upload-release-assets@v3.0
         with:
-            files: "target/release/fish_n_chip8_amd64;resources/*;roms/*"
+            files: "linux-release.tar.gz"
             repo-token: ${{ secrets.GITHUB_TOKEN }}
 
   build-win:
