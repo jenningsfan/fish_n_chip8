@@ -2,3 +2,5 @@
 /roms/*
 !/roms/tests/
 *.bak
+/binaries/
+binaries.zip

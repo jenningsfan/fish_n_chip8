@@ -93,12 +93,12 @@ impl CPU {
 
     pub fn handle_opcode(&mut self, pressed_keys: &HashSet<u8>) {
         let opcode = (self.memory[self.pc as usize] as u16) << 8 | (self.memory[self.pc as usize + 1] as u16);
-        let opcode_type = (opcode & 0xF000) >> 12;        // TAAA
+        let opcode_type = (opcode & 0xF000) >> 12;      // TAAA
         let reg_x = (opcode as usize & 0x0F00) >> 8;    // AXAA
         let reg_y = (opcode as usize & 0x00F0) >> 4;    // AAYA
-        let nnn = opcode & 0x0FFF;                        // ANNN
-        let nn = (opcode & 0x00FF) as u8;                         // AANN
-        let n = (opcode & 0x000F) as u8;                          // AAAN
+        let nnn = opcode & 0x0FFF;                      // ANNN
+        let nn = (opcode & 0x00FF) as u8;               // AANN
+        let n = (opcode & 0x000F) as u8;                // AAAN
 
         self.pc += 2;
 
