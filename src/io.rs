@@ -1,5 +1,5 @@
 use ggegui::Gui;
-use ggegui::egui::{self, menu};
+use ggegui::egui::{self, menu, Window};
 use rfd;
 
 use ggez::{Context, ContextBuilder, GameResult};
@@ -13,7 +13,7 @@ use ggez::input::keyboard::{KeyCode, KeyboardContext, KeyInput};
 use std::collections::HashSet;
 use std::{env, path, fs};
 
-use crate::cpu::{self, CPU};
+use crate::cpu::{self, CPU, ShiftingReg, RegSaveLoadQuirk};
 
 const PIXEL_SIZE: f32 = 16.0;
 const MENU_BAR_HEIGHT: f32 = 24.0;
@@ -24,6 +24,7 @@ pub struct EmulatorIO {
     beep_sound: Source,
     cpu: CPU,
     gui: Gui,
+    quirks_window_open: bool,
     menu_bar_height: f32, // probs not best practice
 }
 
@@ -43,6 +44,7 @@ impl EmulatorIO {
             cpu: CPU::new(),
             gui: Gui::new(ctx),
             menu_bar_height: 0.0,
+            quirks_window_open: false,
         };
         
         created.beep_sound.set_repeat(true);
@@ -93,6 +95,67 @@ impl EmulatorIO {
         pressed_nums
     }
 
+    fn update_cpu(&mut self, ctx: &mut Context) -> GameResult {
+        let pressed_keys = self.get_pressed_keys(&ctx.keyboard);
+
+        if self.cpu.timer_tick() {
+            self.beep_sound.play_later()?;
+        }
+        else {
+            self.beep_sound.stop(&ctx.audio)?;
+        }
+
+        for _ in 0..12 {
+            self.cpu.handle_opcode(&pressed_keys);
+        }
+
+        Ok(())
+    }
+
+    fn update_gui(&mut self, ctx: &mut Context) -> GameResult {
+        let gui_ctx = &self.gui.ctx();
+
+        let height = egui::TopBottomPanel::top("MenuBar").show(gui_ctx, |ui| {
+            menu::bar(ui, |ui| {
+                if ui.button("Load ROM").clicked() {
+                    if let Some(path) = rfd::FileDialog::new().pick_file() {
+                        let rom = fs::read(path).unwrap(); // TODO: Error Handling
+                        self.cpu = CPU::new();
+                        self.cpu.load_rom(&rom);
+                    }
+                }
+                if ui.button("Configure quirks").clicked() {
+                    self.quirks_window_open = true;
+                }
+                if self.quirks_window_open {
+                    Window::new("Quirks").open(&mut true).show(gui_ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("vF reset on all 8XYO opcodes: ");
+                            ui.checkbox(&mut self.cpu.quirks.vF_reset, "");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Shifting opcodes operate vX: ");
+                            ui.selectable_value(&mut self.cpu.quirks.shifting, ShiftingReg::vX, "vX");
+                            ui.selectable_value(&mut self.cpu.quirks.shifting, ShiftingReg::vY, "vY");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Register save/load opcode behaviour: ");
+                            ui.selectable_value(&mut self.cpu.quirks.reg_save_load, RegSaveLoadQuirk::Unchanged, "I does not change");
+                            ui.selectable_value(&mut self.cpu.quirks.reg_save_load, RegSaveLoadQuirk::X, "I = I + X");
+                            ui.selectable_value(&mut self.cpu.quirks.reg_save_load, RegSaveLoadQuirk::XPlusOne, "I = I + X + 1");
+                        });
+                    });
+                }
+            });
+        }).response.rect.height();
+
+        self.gui.update(ctx);
+        self.menu_bar_height = height;
+        //ctx.gfx.set_drawable_size(SCREEN_SIZE.0, SCREEN_SIZE.1 as f32 + height)?; // make room for whole game
+
+        Ok(())
+    }
+
     fn draw_gui(&mut self, canvas: &mut Canvas) {
         canvas.draw(
             &self.gui, 
@@ -121,45 +184,6 @@ impl EmulatorIO {
 
         self.cpu.pixels_dirty = false;
         canvas.draw(&self.pixels_batch, DrawParam::new());
-    }
-
-    fn update_cpu(&mut self, ctx: &mut Context) -> GameResult {
-        let pressed_keys = self.get_pressed_keys(&ctx.keyboard);
-
-        if self.cpu.timer_tick() {
-            self.beep_sound.play_later()?;
-        }
-        else {
-            self.beep_sound.stop(&ctx.audio)?;
-        }
-
-        for _ in 0..12 {
-            self.cpu.handle_opcode(&pressed_keys);
-        }
-
-        Ok(())
-    }
-
-    fn update_gui(&mut self, ctx: &mut Context) -> GameResult {
-        let gui_ctx = self.gui.ctx();
-
-        let height = egui::TopBottomPanel::top("MenuBar").show(&gui_ctx, |ui| {
-            menu::bar(ui, |ui| {
-                if ui.button("Load ROM").clicked() {
-                    if let Some(path) = rfd::FileDialog::new().pick_file() {
-                        let rom = fs::read(path).unwrap(); // TODO: Error Handling
-                        self.cpu = CPU::new();
-                        self.cpu.load_rom(&rom);
-                    }
-                }
-            });
-        }).response.rect.height();
-
-        self.gui.update(ctx);
-        self.menu_bar_height = height;
-        //ctx.gfx.set_drawable_size(SCREEN_SIZE.0, SCREEN_SIZE.1 as f32 + height)?; // make room for whole game
-
-        Ok(())
     }
 }
 

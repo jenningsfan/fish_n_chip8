@@ -30,9 +30,43 @@ const FONT_DATA: [u8; 5 * 16] = [
 const FONT_START: usize = 0x50;
 const FONT_END: usize = FONT_START + FONT_DATA.len();
 
+#[derive(PartialEq)]
+pub enum RegSaveLoadQuirk {
+    Unchanged,
+    X,
+    XPlusOne,
+}
+
+#[derive(PartialEq)]
+pub enum ShiftingReg {
+    vX,
+    vY,
+}
+
+pub struct Quirks {
+    pub vF_reset: bool,
+    pub shifting: ShiftingReg,
+    pub reg_save_load: RegSaveLoadQuirk,
+    pub jump: bool,
+    pub screen_wrap: bool,
+}
+
+impl Quirks {
+    pub fn default() -> Self {
+        Self {
+            shifting: ShiftingReg::vX,
+            vF_reset: false,
+            reg_save_load: RegSaveLoadQuirk::Unchanged,
+            jump: false,
+            screen_wrap: false,
+        }
+    }
+}
+
 pub struct CPU {
     pub pixels: [[bool; WIDTH]; HEIGHT],
     pub pixels_dirty: bool,
+    pub quirks: Quirks,
     memory: [u8; RAM_SIZE],
     delay_timer: u8,
     sound_timer: u8,
@@ -51,6 +85,7 @@ impl CPU {
         let mut created = Self {
             pixels: [[false; WIDTH]; HEIGHT],
             pixels_dirty: true,
+            quirks: Quirks::default(),
             memory: [0; RAM_SIZE],
             delay_timer: 0,
             sound_timer: 0,
