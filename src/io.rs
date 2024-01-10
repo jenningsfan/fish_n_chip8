@@ -16,7 +16,8 @@ use std::{env, path, fs};
 use crate::cpu::{self, CPU};
 
 const PIXEL_SIZE: f32 = 16.0;
-pub const SCREEN_SIZE: (f32, f32) = (cpu::WIDTH as f32 * PIXEL_SIZE, cpu::HEIGHT as f32 * PIXEL_SIZE);
+const MENU_BAR_HEIGHT: f32 = 24.0;
+pub const SCREEN_SIZE: (f32, f32) = (cpu::WIDTH as f32 * PIXEL_SIZE, cpu::HEIGHT as f32 * PIXEL_SIZE + MENU_BAR_HEIGHT);
 
 pub struct EmulatorIO {
     pixels_batch: InstanceArray,
@@ -110,8 +111,8 @@ impl EmulatorIO {
                 if *pixel {
                     self.pixels_batch.push(
                         DrawParam::new().dest(Vec2::new(
-                            row_i as f32 * PIXEL_SIZE + self.menu_bar_height,
-                            col_i as f32 * PIXEL_SIZE,
+                            row_i as f32 * PIXEL_SIZE,
+                            col_i as f32 * PIXEL_SIZE + MENU_BAR_HEIGHT,
                         )),
                     );
                 }
