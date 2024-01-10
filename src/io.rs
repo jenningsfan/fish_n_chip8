@@ -44,7 +44,7 @@ impl EmulatorIO {
             gui: Gui::new(ctx),
             menu_bar_height: 0.0,
         };
-
+        
         created.beep_sound.set_repeat(true);
 
         let rom = vec![0x12, 0x00]; // infinte loop
@@ -126,11 +126,11 @@ impl EmulatorIO {
     fn update_cpu(&mut self, ctx: &mut Context) -> GameResult {
         let pressed_keys = self.get_pressed_keys(&ctx.keyboard);
 
-        if self.cpu.timer_tick() && !self.beep_sound.playing() {
-            self.beep_sound.play(&ctx.audio)?;
+        if self.cpu.timer_tick() {
+            self.beep_sound.play_later()?;
         }
         else {
-            self.beep_sound.pause();
+            self.beep_sound.stop(&ctx.audio)?;
         }
 
         for _ in 0..12 {
