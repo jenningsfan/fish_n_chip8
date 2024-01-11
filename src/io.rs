@@ -13,7 +13,7 @@ use ggez::input::keyboard::{KeyCode, KeyboardContext, KeyInput};
 use std::collections::HashSet;
 use std::{env, path, fs};
 
-use crate::cpu::{self, CPU, ShiftingReg, RegSaveLoadQuirk};
+use crate::cpu::{self, CPU, ShiftingReg, RegSaveLoadQuirk, JumpBehviour};
 
 const PIXEL_SIZE: f32 = 16.0;
 const MENU_BAR_HEIGHT: f32 = 24.0;
@@ -128,21 +128,30 @@ impl EmulatorIO {
                     self.quirks_window_open = true;
                 }
                 if self.quirks_window_open {
-                    Window::new("Quirks").open(&mut true).show(gui_ctx, |ui| {
+                    Window::new("Quirks").open(&mut self.quirks_window_open).show(gui_ctx, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("vF reset on all 8XYO opcodes: ");
-                            ui.checkbox(&mut self.cpu.quirks.vF_reset, "");
+                            ui.checkbox(&mut self.cpu.quirks.VF_reset, "");
                         });
                         ui.horizontal(|ui| {
-                            ui.label("Shifting opcodes operate vX: ");
-                            ui.selectable_value(&mut self.cpu.quirks.shifting, ShiftingReg::vX, "vX");
-                            ui.selectable_value(&mut self.cpu.quirks.shifting, ShiftingReg::vY, "vY");
+                            ui.label("Shifting opcodes operate on: ");
+                            ui.selectable_value(&mut self.cpu.quirks.shifting, ShiftingReg::VX, "vX");
+                            ui.selectable_value(&mut self.cpu.quirks.shifting, ShiftingReg::VY, "vY");
                         });
                         ui.horizontal(|ui| {
                             ui.label("Register save/load opcode behaviour: ");
-                            ui.selectable_value(&mut self.cpu.quirks.reg_save_load, RegSaveLoadQuirk::Unchanged, "I does not change");
+                            ui.selectable_value(&mut self.cpu.quirks.reg_save_load, RegSaveLoadQuirk::Unchanged, "Do not modify I");
                             ui.selectable_value(&mut self.cpu.quirks.reg_save_load, RegSaveLoadQuirk::X, "I = I + X");
                             ui.selectable_value(&mut self.cpu.quirks.reg_save_load, RegSaveLoadQuirk::XPlusOne, "I = I + X + 1");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Jump opcode behaviour: ");
+                            ui.selectable_value(&mut self.cpu.quirks.jump, JumpBehviour::BNNN, "BNNN");
+                            ui.selectable_value(&mut self.cpu.quirks.jump, JumpBehviour::BXNN, "BXNN");
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Sprites wrap at edges of screen: ");
+                            ui.checkbox(&mut self.cpu.quirks.screen_wrap, "");
                         });
                     });
                 }

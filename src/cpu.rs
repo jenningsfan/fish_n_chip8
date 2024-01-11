@@ -39,25 +39,31 @@ pub enum RegSaveLoadQuirk {
 
 #[derive(PartialEq)]
 pub enum ShiftingReg {
-    vX,
-    vY,
+    VX,
+    VY,
+}
+
+#[derive(PartialEq)]
+pub enum JumpBehviour {
+    BNNN,
+    BXNN,
 }
 
 pub struct Quirks {
-    pub vF_reset: bool,
+    pub VF_reset: bool,
     pub shifting: ShiftingReg,
     pub reg_save_load: RegSaveLoadQuirk,
-    pub jump: bool,
+    pub jump: JumpBehviour,
     pub screen_wrap: bool,
 }
 
 impl Quirks {
     pub fn default() -> Self {
         Self {
-            shifting: ShiftingReg::vX,
-            vF_reset: false,
+            shifting: ShiftingReg::VX,
+            VF_reset: false,
             reg_save_load: RegSaveLoadQuirk::Unchanged,
-            jump: false,
+            jump: JumpBehviour::BNNN,
             screen_wrap: false,
         }
     }
