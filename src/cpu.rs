@@ -279,31 +279,41 @@ impl CPU {
             0xD => {
                 // DXYN - Draw sprit to coord (VX, VY) - width 8 pixels, height N pixels.
                 //        Read from memory location I. VF set to 1 if any pixels erased
-                let col = self.regs[reg_x] as usize % WIDTH;
-                let row = self.regs[reg_y] as usize % HEIGHT;
+                let start_col = self.regs[reg_x] as usize % WIDTH;
+                let start_row = self.regs[reg_y] as usize % HEIGHT;
                 let rows = n;
                 let sprite = &self.memory[self.addr_reg as usize..(self.addr_reg + rows as u16) as usize];
+
                 self.regs[15] = 0;
 
                 for (row_i, sprite_row) in sprite.iter().enumerate() {
                     for col_i in 0..8 {
-                        if col_i + col >= WIDTH || row_i + row >= HEIGHT {
-                            break;
+                        let mut col = col_i + start_col;
+                        let mut row = row_i + start_row;
+
+                        if col >= WIDTH || row >= HEIGHT {
+                            if self.quirks.screen_wrap {
+                                col = col % WIDTH;
+                                row = row % HEIGHT;
+                            }
+                            else {
+                                break;
+                            }
                         }
 
                         let sprite_pixel = (*sprite_row & (1 << (7 - col_i))) == 1 << (7 - col_i); // the 7 - col_i is to make the sprite_row be read in the correct direction
-                        let screen_pixel = self.pixels[row_i + row][col_i + col];
+                        let screen_pixel = self.pixels[row][col];
 
                         if sprite_pixel != screen_pixel {
-                            self.pixels[row_i + row][col_i + col] = true;
+                            self.pixels[row][col] = true;
                             self.pixels_dirty = true;
                         } else {
-                            self.pixels[row_i + row][col_i + col] = false;
+                            self.pixels[row][col] = false;
                             self.pixels_dirty = true;
                         }
 
                         // if gone from set to unset then set VF to 1
-                        if screen_pixel == true && self.pixels[row_i + row][col_i + col] == false {
+                        if screen_pixel == true && self.pixels[row][col] == false {
                             self.regs[15] = 1;
                         }
                     }

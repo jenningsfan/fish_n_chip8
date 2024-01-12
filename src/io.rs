@@ -25,6 +25,7 @@ pub struct EmulatorIO {
     cpu: CPU,
     gui: Gui,
     quirks_window_open: bool,
+    last_loaded_rom: Option<Vec<u8>>,
     menu_bar_height: f32, // probs not best practice
 }
 
@@ -44,6 +45,7 @@ impl EmulatorIO {
             cpu: CPU::new(),
             gui: Gui::new(ctx),
             menu_bar_height: 0.0,
+            last_loaded_rom: None,
             quirks_window_open: false,
         };
         
@@ -122,8 +124,19 @@ impl EmulatorIO {
                         let quirks = self.cpu.quirks;
 
                         let rom = fs::read(path).unwrap(); // TODO: Error Handling
+                        self.last_loaded_rom = Some(rom.clone());
+
                         self.cpu = CPU::new();
                         self.cpu.load_rom(&rom);
+                        self.cpu.quirks = quirks;
+                    }
+                }
+                if ui.button("Restart current ROM").clicked() {
+                    if let Some(rom) = &self.last_loaded_rom {
+                        let quirks = self.cpu.quirks;
+
+                        self.cpu = CPU::new();
+                        self.cpu.load_rom(rom);
                         self.cpu.quirks = quirks;
                     }
                 }
