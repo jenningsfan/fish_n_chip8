@@ -119,9 +119,12 @@ impl EmulatorIO {
             menu::bar(ui, |ui| {
                 if ui.button("Load ROM").clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_file() {
+                        let quirks = self.cpu.quirks;
+
                         let rom = fs::read(path).unwrap(); // TODO: Error Handling
                         self.cpu = CPU::new();
                         self.cpu.load_rom(&rom);
+                        self.cpu.quirks = quirks;
                     }
                 }
                 if ui.button("Configure quirks").clicked() {
@@ -131,7 +134,7 @@ impl EmulatorIO {
                     Window::new("Quirks").open(&mut self.quirks_window_open).show(gui_ctx, |ui| {
                         ui.horizontal(|ui| {
                             ui.label("vF reset on all 8XYO opcodes: ");
-                            ui.checkbox(&mut self.cpu.quirks.VF_reset, "");
+                            ui.checkbox(&mut self.cpu.quirks.vf_reset, "");
                         });
                         ui.horizontal(|ui| {
                             ui.label("Shifting opcodes operate on: ");

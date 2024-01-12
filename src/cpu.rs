@@ -30,27 +30,28 @@ const FONT_DATA: [u8; 5 * 16] = [
 const FONT_START: usize = 0x50;
 const FONT_END: usize = FONT_START + FONT_DATA.len();
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum RegSaveLoadQuirk {
     Unchanged,
     X,
     XPlusOne,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum ShiftingReg {
     VX,
     VY,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum JumpBehviour {
     BNNN,
     BXNN,
 }
 
+#[derive(Clone, Copy)]
 pub struct Quirks {
-    pub VF_reset: bool,
+    pub vf_reset: bool,
     pub shifting: ShiftingReg,
     pub reg_save_load: RegSaveLoadQuirk,
     pub jump: JumpBehviour,
@@ -61,7 +62,7 @@ impl Quirks {
     pub fn default() -> Self {
         Self {
             shifting: ShiftingReg::VX,
-            VF_reset: false,
+            vf_reset: false,
             reg_save_load: RegSaveLoadQuirk::Unchanged,
             jump: JumpBehviour::BNNN,
             screen_wrap: false,
@@ -155,7 +156,7 @@ impl CPU {
                         // 00EE - return from a subroutine
                         self.stack.pop().expect("Stack should not be empty")
                     },
-                    unsopported => panic!("Unsopported opcode {:#06x}", unsopported),
+                    unsopported => panic!("Unsopported opcode {:#06x} at {:#06x}", unsopported, self.pc),
                 }
             }
             0x1 => {
@@ -195,6 +196,10 @@ impl CPU {
             }
             0x8 => {
                 // 8XYO - perform operation - on VX and VY
+                if self.quirks.vf_reset {
+                    self.regs[15] = 0;
+                }
+
                 let reg_y = self.regs[reg_y];
                 let reg_x = &mut self.regs[reg_x];
 
@@ -220,8 +225,14 @@ impl CPU {
                     }
                     0x6 => {
                         // 8XY6 - VX >>= 1. VF is set to LSB of VX before shift
-                        let before_shift = *reg_x;
-                        *reg_x >>= 1;
+                        let mut reg = match self.quirks.shifting {
+                            ShiftingReg::VX => *reg_x,
+                            ShiftingReg::VY => reg_y,
+                        };
+
+                        let before_shift = reg;
+                        reg >>= 1;
+                        *reg_x = reg;
                         self.regs[15] = before_shift & 1;
                     }
                     0x7 => {
@@ -233,11 +244,17 @@ impl CPU {
                     }
                     0xE => {
                         // 8XYE - VX <<= 1. VF is set to MSB of VX before shift
-                        let before_shift = *reg_x;
-                        *reg_x <<= 1;
+                        let mut reg = match self.quirks.shifting {
+                            ShiftingReg::VX => *reg_x,
+                            ShiftingReg::VY => reg_y,
+                        };
+
+                        let before_shift = reg;
+                        reg <<= 1;
+                        *reg_x = reg;
                         self.regs[15] = (before_shift & 0b1000_0000) >> 7;
                     }
-                    _ => panic!("Unsopported opcode {:#06x}", opcode),
+                    _ => panic!("Unsopported opcode {:#06x} at {:#06x}", opcode, self.pc),
                 };
             }
             0x9 => {
@@ -247,7 +264,14 @@ impl CPU {
                 }
             }
             0xA => self.addr_reg = nnn, // ANNN - sets I to NNN
-            0xB => self.pc = self.regs[0] as u16 + nnn, // BXNN jump to NNN + V0
+            0xB => {
+                // BNNN jump to NNN + V0
+                // BXNN jump to XNN + VX
+                match self.quirks.jump {
+                    JumpBehviour::BNNN => self.pc = self.regs[0] as u16 + nnn,
+                    JumpBehviour::BXNN => self.pc = self.regs[reg_x] as u16 + nnn as u16,
+                }
+            }
             0xC => {
                 // CXNN - VX = rand & NN; rand 0-255
                 self.regs[reg_x] = self.rng.gen::<u8>() & nn;
@@ -255,8 +279,8 @@ impl CPU {
             0xD => {
                 // DXYN - Draw sprit to coord (VX, VY) - width 8 pixels, height N pixels.
                 //        Read from memory location I. VF set to 1 if any pixels erased
-                let col = self.regs[reg_x] as usize;
-                let row = self.regs[reg_y] as usize;
+                let col = self.regs[reg_x] as usize % WIDTH;
+                let row = self.regs[reg_y] as usize % HEIGHT;
                 let rows = n;
                 let sprite = &self.memory[self.addr_reg as usize..(self.addr_reg + rows as u16) as usize];
                 self.regs[15] = 0;
@@ -299,7 +323,7 @@ impl CPU {
                             self.pc += 2;
                         }
                     }
-                    _ => panic!("Unsopported opcode {:#06x}", opcode),
+                    _ => panic!("Unsopported opcode {:#06x} at {:#06x}", opcode, self.pc),
                 }
             }
             0xF => {
@@ -370,6 +394,12 @@ impl CPU {
                         for i in 0..total_regs {
                             self.memory[(self.addr_reg + i) as usize] = self.regs[(i) as usize];
                         }
+
+                        match self.quirks.reg_save_load {
+                            RegSaveLoadQuirk::Unchanged => {},
+                            RegSaveLoadQuirk::X => self.addr_reg += total_regs,
+                            RegSaveLoadQuirk::XPlusOne => self.addr_reg += total_regs + 1,
+                        };
                     }
                     0x65 => {
                         // FX65 - Load regs V0 - VX(inclusive) from I - I + X. I is unmodified
@@ -378,8 +408,14 @@ impl CPU {
                         for i in 0..total_regs {
                             self.regs[i as usize] = self.memory[(self.addr_reg + i) as usize];
                         }
+
+                        match self.quirks.reg_save_load {
+                            RegSaveLoadQuirk::Unchanged => {},
+                            RegSaveLoadQuirk::X => self.addr_reg += total_regs,
+                            RegSaveLoadQuirk::XPlusOne => self.addr_reg += total_regs + 1,
+                        };
                     }
-                    _ => panic!("Unsopported opcode {:#06x}", opcode),
+                    _ => panic!("Unsopported opcode {:#06x} at {:#06x}", opcode, self.pc),
                 }
             }
             _ => panic!("should only be a nibble"),
