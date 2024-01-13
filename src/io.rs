@@ -1,5 +1,5 @@
 use ggegui::Gui;
-use ggegui::egui::{self, menu, Window};
+use ggegui::egui::{self, menu, Window, widgets};
 use rfd;
 
 use ggez::{Context, ContextBuilder, GameResult};
@@ -17,6 +17,8 @@ use crate::cpu::{self, CPU, ShiftingReg, RegSaveLoadQuirk, JumpBehviour};
 
 const DEFAULT_CYCLES_PER_FRAME: u16 = 12;
 
+const DEFAULT_COLOUR: Color = Color {r: 0.057805423, g: 0.057805423, b: 0.057805423, a: 1.0};
+
 const PIXEL_SIZE: f32 = 16.0;
 const MENU_BAR_HEIGHT: f32 = 24.0;
 const SCREEN_SIZE: (f32, f32) = (cpu::WIDTH as f32 * PIXEL_SIZE, cpu::HEIGHT as f32 * PIXEL_SIZE + MENU_BAR_HEIGHT);
@@ -31,6 +33,8 @@ pub struct EmulatorIO {
     last_loaded_rom: Option<Vec<u8>>,
     menu_bar_height: f32,
     pixel_size: f32,
+    pixel_on_colour: Color,
+    pixel_off_colour: Color,
 }
 
 impl EmulatorIO {
@@ -39,7 +43,7 @@ impl EmulatorIO {
             &ctx.gfx,
             PIXEL_SIZE as u32,
             PIXEL_SIZE as u32,
-            Some(Color::WHITE),
+            None,
         );
         let pixels_batch = InstanceArray::new(&ctx.gfx, pixel_rect);
 
@@ -53,6 +57,8 @@ impl EmulatorIO {
             last_loaded_rom: None,
             config_window_open: false,
             pixel_size: PIXEL_SIZE,
+            pixel_off_colour: DEFAULT_COLOUR,
+            pixel_on_colour: Color::WHITE,
         };
         
         created.beep_sound.set_repeat(true);
@@ -121,6 +127,10 @@ impl EmulatorIO {
     }
 
     fn update_gui(&mut self, ctx: &mut Context) -> GameResult {
+        if ctx.gfx.drawable_size() == (0.0, 0.0) {
+            return Ok(());
+        }
+
         let gui_ctx = &self.gui.ctx();
 
         let height = egui::TopBottomPanel::top("MenuBar").show(gui_ctx, |ui| {
@@ -157,12 +167,38 @@ impl EmulatorIO {
                         });
                         ui.horizontal(|ui| {
                             ui.label("Pixel size: ");
-                            ui.add(egui::DragValue::new(&mut self.pixel_size))
-                                .changed()
-                                .then(|| {
+                            ui.add(egui::DragValue::new(&mut self.pixel_size)).changed().then(|| {
                                     let width = self.pixel_size * cpu::WIDTH as f32;
                                     ctx.gfx.set_drawable_size(width, width / 2.0 + self.menu_bar_height).unwrap();
-                                });
+                            });
+                        });
+                        ui.separator();
+
+                        ui.heading("Apperance: ");
+                        ui.horizontal(|ui| {
+                            ui.label("Background: ");
+
+                            let colour = self.pixel_off_colour;
+                            let mut colour = [colour.r, colour.g, colour.b];
+                            widgets::color_picker::color_edit_button_rgb(ui, &mut colour);
+                            self.pixel_off_colour = Color::new(colour[0], colour[1], colour[2], 100.0);
+                            dbg!(colour);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Foreground: ");
+
+                            let colour = self.pixel_on_colour;
+                            let mut colour = [colour.r, colour.g, colour.b];
+                            widgets::color_picker::color_edit_button_rgb(ui, &mut colour).changed().then(|| {
+                                let pixel_rect = Image::from_color(
+                                    &ctx.gfx,
+                                    self.pixel_size as u32,
+                                    self.pixel_size as u32,
+                                    None,
+                                );
+                                self.pixels_batch = InstanceArray::new(&ctx.gfx, pixel_rect);
+                            });
+                            self.pixel_on_colour = Color::new(colour[0], colour[1], colour[2], 100.0);
                         });
                         ui.separator();
 
@@ -223,7 +259,18 @@ impl EmulatorIO {
                         DrawParam::new().dest(Vec2::new(
                             row_i as f32 * self.pixel_size,
                             col_i as f32 * self.pixel_size + MENU_BAR_HEIGHT,
-                        )),
+                        ))
+                        .color(self.pixel_on_colour),
+                    );
+                }
+                else {
+                    self.pixels_batch.push(
+                        DrawParam::new()
+                        .dest(Vec2::new(
+                            row_i as f32 * self.pixel_size,
+                            col_i as f32 * self.pixel_size + MENU_BAR_HEIGHT,
+                        ))
+                        .color(self.pixel_off_colour),
                     );
                 }
             }
@@ -272,13 +319,17 @@ impl EventHandler for EmulatorIO {
 	}
 
     fn resize_event(&mut self, ctx: &mut Context, width: f32, height: f32) -> Result<(), ggez::GameError> {
-        self.pixel_size = (width / cpu::WIDTH as f32).floor();
+        if width == 0.0 || height == 0.0 {
+            return Ok(());
+        }
+
+        self.pixel_size = (width / cpu::WIDTH as f32).min(height / cpu::HEIGHT as f32).floor(); // allow resizing from both directions without part of the screen being cut off
 
         let pixel_rect = Image::from_color(
             &ctx.gfx,
             self.pixel_size as u32,
             self.pixel_size as u32,
-            Some(Color::WHITE),
+            None,
         );
         self.pixels_batch = InstanceArray::new(&ctx.gfx, pixel_rect);
         self.gui.input.resize_event(width, height);
