@@ -32,6 +32,8 @@ pub struct EmulatorIO {
     config_window_open: bool,
     last_loaded_rom: Option<Vec<u8>>,
     menu_bar_height: f32,
+    height_offset: f32,
+    width_offset: f32,
     pixel_size: f32,
     pixel_on_colour: Color,
     pixel_off_colour: Color,
@@ -53,7 +55,9 @@ impl EmulatorIO {
             cpu: CPU::new(),
             cycles_per_frame: DEFAULT_CYCLES_PER_FRAME,
             gui: Gui::new(ctx),
-            menu_bar_height: 0.0,
+            menu_bar_height: MENU_BAR_HEIGHT,
+            height_offset: 0.0,
+            width_offset: 0.0,
             last_loaded_rom: None,
             config_window_open: false,
             pixel_size: PIXEL_SIZE,
@@ -65,6 +69,8 @@ impl EmulatorIO {
 
         let rom = vec![0x12, 0x00]; // infinte loop
         created.cpu.load_rom(&rom);
+
+        created.resize_event(ctx, ctx.gfx.drawable_size().0, ctx.gfx.drawable_size().0).unwrap();
 
         created
     }
@@ -137,6 +143,8 @@ impl EmulatorIO {
             menu::bar(ui, |ui| {
                 if ui.button("Load ROM").clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_file() {
+                        ctx.gfx.set_window_title(format!("Fish n CHIP-8: {}", path.file_name().unwrap().to_str().unwrap()).as_str());
+
                         let quirks = self.cpu.quirks;
 
                         let rom = fs::read(path).unwrap();
@@ -182,7 +190,6 @@ impl EmulatorIO {
                             let mut colour = [colour.r, colour.g, colour.b];
                             widgets::color_picker::color_edit_button_rgb(ui, &mut colour);
                             self.pixel_off_colour = Color::new(colour[0], colour[1], colour[2], 100.0);
-                            dbg!(colour);
                         });
                         ui.horizontal(|ui| {
                             ui.label("Foreground: ");
@@ -257,8 +264,8 @@ impl EmulatorIO {
                 if *pixel {
                     self.pixels_batch.push(
                         DrawParam::new().dest(Vec2::new(
-                            row_i as f32 * self.pixel_size,
-                            col_i as f32 * self.pixel_size + MENU_BAR_HEIGHT,
+                            row_i as f32 * self.pixel_size + self.width_offset,
+                            col_i as f32 * self.pixel_size + self.height_offset + self.menu_bar_height,
                         ))
                         .color(self.pixel_on_colour),
                     );
@@ -267,8 +274,8 @@ impl EmulatorIO {
                     self.pixels_batch.push(
                         DrawParam::new()
                         .dest(Vec2::new(
-                            row_i as f32 * self.pixel_size,
-                            col_i as f32 * self.pixel_size + MENU_BAR_HEIGHT,
+                            row_i as f32 * self.pixel_size + self.width_offset,
+                            col_i as f32 * self.pixel_size + self.height_offset + self.menu_bar_height,
                         ))
                         .color(self.pixel_off_colour),
                     );
@@ -333,6 +340,9 @@ impl EventHandler for EmulatorIO {
         );
         self.pixels_batch = InstanceArray::new(&ctx.gfx, pixel_rect);
         self.gui.input.resize_event(width, height);
+
+        self.height_offset = ((height - self.menu_bar_height) - self.pixel_size * cpu::HEIGHT as f32) / 2.0;
+        self.width_offset = (width - self.pixel_size * cpu::WIDTH as f32) / 2.0;
 
         Ok(())
     }
