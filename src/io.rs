@@ -15,18 +15,22 @@ use std::{env, path, fs};
 
 use crate::cpu::{self, CPU, ShiftingReg, RegSaveLoadQuirk, JumpBehviour};
 
+const DEFAULT_CYCLES_PER_FRAME: u16 = 12;
+
 const PIXEL_SIZE: f32 = 16.0;
 const MENU_BAR_HEIGHT: f32 = 24.0;
-pub const SCREEN_SIZE: (f32, f32) = (cpu::WIDTH as f32 * PIXEL_SIZE, cpu::HEIGHT as f32 * PIXEL_SIZE + MENU_BAR_HEIGHT);
+const SCREEN_SIZE: (f32, f32) = (cpu::WIDTH as f32 * PIXEL_SIZE, cpu::HEIGHT as f32 * PIXEL_SIZE + MENU_BAR_HEIGHT);
 
 pub struct EmulatorIO {
     pixels_batch: InstanceArray,
     beep_sound: Source,
     cpu: CPU,
+    cycles_per_frame: u16,
     gui: Gui,
-    quirks_window_open: bool,
+    config_window_open: bool,
     last_loaded_rom: Option<Vec<u8>>,
-    menu_bar_height: f32, // probs not best practice
+    menu_bar_height: f32,
+    pixel_size: f32,
 }
 
 impl EmulatorIO {
@@ -43,10 +47,12 @@ impl EmulatorIO {
             pixels_batch,
             beep_sound: audio::Source::new(ctx, "/beep.wav").unwrap(),
             cpu: CPU::new(),
+            cycles_per_frame: DEFAULT_CYCLES_PER_FRAME,
             gui: Gui::new(ctx),
             menu_bar_height: 0.0,
             last_loaded_rom: None,
-            quirks_window_open: false,
+            config_window_open: false,
+            pixel_size: PIXEL_SIZE,
         };
         
         created.beep_sound.set_repeat(true);
@@ -107,7 +113,7 @@ impl EmulatorIO {
             self.beep_sound.stop(&ctx.audio)?;
         }
 
-        for _ in 0..12 {
+        for _ in 0..self.cycles_per_frame {
             self.cpu.handle_opcode(&pressed_keys);
         }
 
@@ -123,7 +129,7 @@ impl EmulatorIO {
                     if let Some(path) = rfd::FileDialog::new().pick_file() {
                         let quirks = self.cpu.quirks;
 
-                        let rom = fs::read(path).unwrap(); // TODO: Error Handling
+                        let rom = fs::read(path).unwrap();
                         self.last_loaded_rom = Some(rom.clone());
 
                         self.cpu = CPU::new();
@@ -140,13 +146,29 @@ impl EmulatorIO {
                         self.cpu.quirks = quirks;
                     }
                 }
-                if ui.button("Configure quirks").clicked() {
-                    self.quirks_window_open = true;
+                if ui.button("Configuration").clicked() {
+                    self.config_window_open = true;
                 }
-                if self.quirks_window_open {
-                    Window::new("Quirks").open(&mut self.quirks_window_open).show(gui_ctx, |ui| {
+                if self.config_window_open {
+                    Window::new("Configuration").open(&mut self.config_window_open).resizable(true).show(gui_ctx, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label("vF reset on all 8XYO opcodes: ");
+                            ui.label("Cyles per frame: ");
+                            ui.add(egui::DragValue::new(&mut self.cycles_per_frame));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Pixel size: ");
+                            ui.add(egui::DragValue::new(&mut self.pixel_size))
+                                .changed()
+                                .then(|| {
+                                    let width = self.pixel_size * cpu::WIDTH as f32;
+                                    ctx.gfx.set_drawable_size(width, width / 2.0 + self.menu_bar_height).unwrap();
+                                });
+                        });
+                        ui.separator();
+
+                        ui.heading("Quirks: ");
+                        ui.horizontal(|ui| {
+                            ui.label("VF reset on all 8XYO opcodes: ");
                             ui.checkbox(&mut self.cpu.quirks.vf_reset, "");
                         });
                         ui.horizontal(|ui| {
@@ -199,8 +221,8 @@ impl EmulatorIO {
                 if *pixel {
                     self.pixels_batch.push(
                         DrawParam::new().dest(Vec2::new(
-                            row_i as f32 * PIXEL_SIZE,
-                            col_i as f32 * PIXEL_SIZE + MENU_BAR_HEIGHT,
+                            row_i as f32 * self.pixel_size,
+                            col_i as f32 * self.pixel_size + MENU_BAR_HEIGHT,
                         )),
                     );
                 }
@@ -243,6 +265,26 @@ impl EventHandler for EmulatorIO {
 
         canvas.finish(ctx)
     }
+
+    fn text_input_event( &mut self, _ctx: &mut ggez::Context, character: char) -> GameResult {
+		self.gui.input.text_input_event(character);
+		Ok(())
+	}
+
+    fn resize_event(&mut self, ctx: &mut Context, width: f32, height: f32) -> Result<(), ggez::GameError> {
+        self.pixel_size = (width / cpu::WIDTH as f32).floor();
+
+        let pixel_rect = Image::from_color(
+            &ctx.gfx,
+            self.pixel_size as u32,
+            self.pixel_size as u32,
+            Some(Color::WHITE),
+        );
+        self.pixels_batch = InstanceArray::new(&ctx.gfx, pixel_rect);
+        self.gui.input.resize_event(width, height);
+
+        Ok(())
+    }
 }
 
 pub fn emulator_main() {
@@ -256,7 +298,10 @@ pub fn emulator_main() {
 
     let (mut ctx, event_loop) = ContextBuilder::new("fish_n_chip8", "jenningsfan")
         .window_setup(WindowSetup::default().title("Fish n CHIP-8"))
-        .window_mode(ggez::conf::WindowMode::default().dimensions(SCREEN_SIZE.0, SCREEN_SIZE.1))
+        .window_mode(ggez::conf::WindowMode::default()
+            .dimensions(SCREEN_SIZE.0, SCREEN_SIZE.1)
+            .resizable(true)
+        )
         .add_resource_path(resource_dir)
         .build()
         .expect("Failed to create game context");
