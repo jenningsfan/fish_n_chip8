@@ -13,15 +13,16 @@ use ggez::input::keyboard::{KeyCode, KeyboardContext, KeyInput};
 use std::collections::HashSet;
 use std::{env, path, fs};
 
-use crate::cpu::{self, CPU, ShiftingReg, RegSaveLoadQuirk, JumpBehviour};
+use crate::cpu::{self, CPU, ShiftingReg, RegSaveLoadQuirk, JumpBehviour, Quirks};
 
 const DEFAULT_CYCLES_PER_FRAME: u16 = 12;
 
-const DEFAULT_COLOUR: Color = Color {r: 0.057805423, g: 0.057805423, b: 0.057805423, a: 1.0};
+const DEFAULT_OFF_COLOUR: Color = Color {r: 0.057805423, g: 0.057805423, b: 0.057805423, a: 1.0};
+const DEFAULT_ON_COLOUR: Color = Color::WHITE;
 
-const PIXEL_SIZE: f32 = 16.0;
+const DEFAULT_PIXEL_SIZE: f32 = 16.0;
 const MENU_BAR_HEIGHT: f32 = 24.0;
-const SCREEN_SIZE: (f32, f32) = (cpu::WIDTH as f32 * PIXEL_SIZE, cpu::HEIGHT as f32 * PIXEL_SIZE + MENU_BAR_HEIGHT);
+const SCREEN_SIZE: (f32, f32) = (cpu::WIDTH as f32 * DEFAULT_PIXEL_SIZE, cpu::HEIGHT as f32 * DEFAULT_PIXEL_SIZE + MENU_BAR_HEIGHT);
 
 pub struct EmulatorIO {
     pixels_batch: InstanceArray,
@@ -43,8 +44,8 @@ impl EmulatorIO {
     pub fn new(ctx: &mut Context) -> EmulatorIO {
         let pixel_rect = Image::from_color(
             &ctx.gfx,
-            PIXEL_SIZE as u32,
-            PIXEL_SIZE as u32,
+            DEFAULT_PIXEL_SIZE as u32,
+            DEFAULT_PIXEL_SIZE as u32,
             None,
         );
         let pixels_batch = InstanceArray::new(&ctx.gfx, pixel_rect);
@@ -60,9 +61,9 @@ impl EmulatorIO {
             width_offset: 0.0,
             last_loaded_rom: None,
             config_window_open: false,
-            pixel_size: PIXEL_SIZE,
-            pixel_off_colour: DEFAULT_COLOUR,
-            pixel_on_colour: Color::WHITE,
+            pixel_size: DEFAULT_PIXEL_SIZE,
+            pixel_off_colour: DEFAULT_OFF_COLOUR,
+            pixel_on_colour: DEFAULT_ON_COLOUR,
         };
         
         created.beep_sound.set_repeat(true);
@@ -143,7 +144,7 @@ impl EmulatorIO {
             menu::bar(ui, |ui| {
                 if ui.button("Load ROM").clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_file() {
-                        ctx.gfx.set_window_title(format!("Fish n CHIP-8: {}", path.file_name().unwrap().to_str().unwrap()).as_str());
+                        ctx.gfx.set_window_title(format!("{} - Fish n CHIP-8", path.file_name().unwrap().to_str().unwrap()).as_str());
 
                         let quirks = self.cpu.quirks;
 
@@ -172,7 +173,14 @@ impl EmulatorIO {
                         ui.horizontal(|ui| {
                             ui.label("Cyles per frame: ");
                             ui.add(egui::DragValue::new(&mut self.cycles_per_frame));
+                            
+                            if ui.button("Reset to default").clicked() {
+                                self.cycles_per_frame = DEFAULT_CYCLES_PER_FRAME;
+                            }
                         });
+                        ui.separator();
+
+                        ui.heading("Apperance: ");
                         ui.horizontal(|ui| {
                             ui.label("Pixel size: ");
                             ui.add(egui::DragValue::new(&mut self.pixel_size)).changed().then(|| {
@@ -180,9 +188,6 @@ impl EmulatorIO {
                                     ctx.gfx.set_drawable_size(width, width / 2.0 + self.menu_bar_height).unwrap();
                             });
                         });
-                        ui.separator();
-
-                        ui.heading("Apperance: ");
                         ui.horizontal(|ui| {
                             ui.label("Background: ");
 
@@ -196,17 +201,16 @@ impl EmulatorIO {
 
                             let colour = self.pixel_on_colour;
                             let mut colour = [colour.r, colour.g, colour.b];
-                            widgets::color_picker::color_edit_button_rgb(ui, &mut colour).changed().then(|| {
-                                let pixel_rect = Image::from_color(
-                                    &ctx.gfx,
-                                    self.pixel_size as u32,
-                                    self.pixel_size as u32,
-                                    None,
-                                );
-                                self.pixels_batch = InstanceArray::new(&ctx.gfx, pixel_rect);
-                            });
+                            widgets::color_picker::color_edit_button_rgb(ui, &mut colour);
                             self.pixel_on_colour = Color::new(colour[0], colour[1], colour[2], 100.0);
                         });
+                        if ui.button("Reset apperance to default").clicked() {
+                            self.pixel_off_colour = DEFAULT_OFF_COLOUR;
+                            self.pixel_on_colour = DEFAULT_ON_COLOUR;
+
+                            let width = DEFAULT_PIXEL_SIZE * cpu::WIDTH as f32;
+                            ctx.gfx.set_drawable_size(width, width / 2.0 + self.menu_bar_height).unwrap();
+                        }
                         ui.separator();
 
                         ui.heading("Quirks: ");
@@ -234,6 +238,21 @@ impl EmulatorIO {
                             ui.label("Sprites wrap at edges of screen: ");
                             ui.checkbox(&mut self.cpu.quirks.screen_wrap, "");
                         });
+                        if ui.button("Reset quirks to default").clicked() {
+                            self.cpu.quirks = Quirks::default();
+                        }
+                        ui.separator();
+
+                        if ui.button("Reset all to default").clicked() {
+                            self.cpu.quirks = Quirks::default();
+                            self.cycles_per_frame = DEFAULT_CYCLES_PER_FRAME;
+
+                            let width = DEFAULT_PIXEL_SIZE * cpu::WIDTH as f32;
+                            ctx.gfx.set_drawable_size(width, width / 2.0 + self.menu_bar_height).unwrap();
+
+                            self.pixel_off_colour = DEFAULT_OFF_COLOUR;
+                            self.pixel_on_colour = DEFAULT_ON_COLOUR;
+                        }
                     });
                 }
             });
@@ -248,7 +267,7 @@ impl EmulatorIO {
 
     fn draw_gui(&mut self, canvas: &mut Canvas) {
         canvas.draw(
-            &self.gui, 
+            &self.gui,
             DrawParam::default().dest(Vec2::ZERO),
         );
     }
