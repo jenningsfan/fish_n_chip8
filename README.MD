@@ -12,3 +12,11 @@ fish_n_chip8 is a CHIP-8 emulator written in rust using the [ggez](https://crate
 - [ ] SUPER-CHIP extensions
 - [ ] XO-CHIP extensions
 - [ ] Debugger
+
+## Acknowledgements
+- [Timendus' test ROMS](https://github.com/Timendus/chip8-test-suite)
+- [Kripod's collection of ROMS](https://github.com/kripod/chip8-roms)
+- [tobiasvl's instructions guide](https://tobiasvl.github.io/blog/write-a-chip-8-emulator/)
+- [ggez](https://crates.io/crates/ggez)
+- [egui](https://crates.io/crates/egui)
+- [ggegui](https://crates.io/crates/ggegui)
