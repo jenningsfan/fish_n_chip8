@@ -127,7 +127,11 @@ impl EmulatorIO {
         }
 
         for _ in 0..self.cycles_per_frame {
+            let old_res = self.cpu.resolution;
             self.cpu.handle_opcode(&pressed_keys);
+            if self.cpu.resolution != old_res {
+                self.resize_event(ctx, ctx.gfx.drawable_size().0, ctx.gfx.drawable_size().1)?;
+            }
         }
 
         Ok(())
@@ -154,6 +158,7 @@ impl EmulatorIO {
                         self.cpu = CPU::new();
                         self.cpu.load_rom(&rom);
                         self.cpu.quirks = quirks;
+                        self.resize_event(ctx, ctx.gfx.drawable_size().0, ctx.gfx.drawable_size().1).unwrap();
                     }
                 }
                 if ui.button("Restart current ROM").clicked() {
@@ -184,7 +189,7 @@ impl EmulatorIO {
                         ui.horizontal(|ui| {
                             ui.label("Pixel size: ");
                             ui.add(egui::DragValue::new(&mut self.pixel_size)).changed().then(|| {
-                                    let width = self.pixel_size * cpu::WIDTH as f32;
+                                    let width = self.pixel_size * self.cpu.width() as f32;
                                     ctx.gfx.set_drawable_size(width, width / 2.0 + self.menu_bar_height).unwrap();
                             });
                         });
@@ -208,7 +213,7 @@ impl EmulatorIO {
                             self.pixel_off_colour = DEFAULT_OFF_COLOUR;
                             self.pixel_on_colour = DEFAULT_ON_COLOUR;
 
-                            let width = DEFAULT_PIXEL_SIZE * cpu::WIDTH as f32;
+                            let width = DEFAULT_PIXEL_SIZE * self.cpu.width() as f32;
                             ctx.gfx.set_drawable_size(width, width / 2.0 + self.menu_bar_height).unwrap();
                         }
                         ui.separator();
@@ -247,7 +252,7 @@ impl EmulatorIO {
                             self.cpu.quirks = Quirks::default();
                             self.cycles_per_frame = DEFAULT_CYCLES_PER_FRAME;
 
-                            let width = DEFAULT_PIXEL_SIZE * cpu::WIDTH as f32;
+                            let width = DEFAULT_PIXEL_SIZE * self.cpu.width() as f32;
                             ctx.gfx.set_drawable_size(width, width / 2.0 + self.menu_bar_height).unwrap();
 
                             self.pixel_off_colour = DEFAULT_OFF_COLOUR;
@@ -273,9 +278,6 @@ impl EmulatorIO {
     }
 
     fn draw_pixel_grid(&mut self, _ctx: &mut Context, canvas: &mut Canvas) {
-        // if !self.cpu.pixels_dirty {
-        //     return
-        // }
         self.pixels_batch.clear();
 
         for (col_i, row) in self.cpu.pixels.iter().enumerate() {
@@ -302,7 +304,6 @@ impl EmulatorIO {
             }
         }
 
-        self.cpu.pixels_dirty = false;
         canvas.draw(&self.pixels_batch, DrawParam::new());
     }
 }
@@ -349,7 +350,7 @@ impl EventHandler for EmulatorIO {
             return Ok(());
         }
 
-        self.pixel_size = (width / cpu::WIDTH as f32).min(height / cpu::HEIGHT as f32).floor(); // allow resizing from both directions without part of the screen being cut off
+        self.pixel_size = (width / self.cpu.width() as f32).min(height / self.cpu.height() as f32).floor(); // allow resizing from both directions without part of the screen being cut off
 
         let pixel_rect = Image::from_color(
             &ctx.gfx,
@@ -360,8 +361,8 @@ impl EventHandler for EmulatorIO {
         self.pixels_batch = InstanceArray::new(&ctx.gfx, pixel_rect);
         self.gui.input.resize_event(width, height);
 
-        self.height_offset = ((height - self.menu_bar_height) - self.pixel_size * cpu::HEIGHT as f32) / 2.0;
-        self.width_offset = (width - self.pixel_size * cpu::WIDTH as f32) / 2.0;
+        self.height_offset = ((height - self.menu_bar_height) - self.pixel_size * self.cpu.height() as f32) / 2.0;
+        self.width_offset = (width - self.pixel_size * self.cpu.width() as f32) / 2.0;
 
         Ok(())
     }

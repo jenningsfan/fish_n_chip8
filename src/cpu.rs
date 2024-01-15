@@ -49,6 +49,12 @@ pub enum JumpBehviour {
     BXNN,
 }
 
+#[derive(PartialEq, Clone, Copy)]
+pub enum ScrollingBehviour {
+    Modern,
+    Legacy,
+}
+
 #[derive(Clone, Copy)]
 pub struct Quirks {
     pub vf_reset: bool,
@@ -56,6 +62,7 @@ pub struct Quirks {
     pub reg_save_load: RegSaveLoadQuirk,
     pub jump: JumpBehviour,
     pub screen_wrap: bool,
+    pub scrolling: ScrollingBehviour,
 }
 
 impl Quirks {
@@ -66,13 +73,20 @@ impl Quirks {
             reg_save_load: RegSaveLoadQuirk::Unchanged,
             jump: JumpBehviour::BNNN,
             screen_wrap: false,
+            scrolling: ScrollingBehviour::Modern,
         }
     }
 }
 
+#[derive(PartialEq, Clone, Copy)]
+pub enum Resolution {
+    HighRes,
+    LowRes,
+}
+
 pub struct CPU {
-    pub pixels: [[bool; WIDTH]; HEIGHT],
-    pub pixels_dirty: bool,
+    pub pixels: Vec<Vec<bool>>,
+    pub resolution: Resolution,
     pub quirks: Quirks,
     memory: [u8; RAM_SIZE],
     delay_timer: u8,
@@ -90,8 +104,8 @@ pub struct CPU {
 impl CPU {
     pub fn new() -> CPU {
         let mut created = Self {
-            pixels: [[false; WIDTH]; HEIGHT],
-            pixels_dirty: true,
+            pixels: vec![vec![false; WIDTH]; HEIGHT],
+            resolution: Resolution::LowRes,
             quirks: Quirks::default(),
             memory: [0; RAM_SIZE],
             delay_timer: 0,
@@ -133,6 +147,14 @@ impl CPU {
         }
     }
 
+    pub fn height(&self) -> usize {
+        self.pixels.len()
+    }
+
+    pub fn width(&self) -> usize {
+        self.pixels[0].len()
+    }
+
     pub fn handle_opcode(&mut self, pressed_keys: &HashSet<u8>) {
         let opcode = (self.memory[self.pc as usize] as u16) << 8 | (self.memory[self.pc as usize + 1] as u16);
         let opcode_type = (opcode & 0xF000) >> 12;      // TAAA
@@ -146,17 +168,57 @@ impl CPU {
 
         match opcode_type {
             0x0 => {
-                match opcode {
-                    0x00E0 => {
-                        // 00E0 - clear screen
-                        self.pixels = [[false; WIDTH]; HEIGHT];
-                        self.pixels_dirty = true;
+                if opcode & 0xFFF0 == 0x00C0 {
+                    // 00CN: Scroll display N pixels down; in low resolution mode, N/2 pixels
+                    self.pixels.remove(self.height() - 1);
+                    self.pixels.remove(self.height() - 1);
+
+                    for _ in 0..n {
+                        self.pixels.insert(0, vec![false; self.width()]);
                     }
-                    0x00EE => self.pc = {
-                        // 00EE - return from a subroutine
-                        self.stack.pop().expect("Stack should not be empty")
-                    },
-                    unsopported => panic!("Unsopported opcode {:#06x} at {:#06x}", unsopported, self.pc),
+                }
+                else {
+                    match opcode {
+                        0x00E0 => {
+                            // 00E0 - clear screen
+                            self.pixels = vec![vec![false; self.width()]; self.height()];
+                        }
+                        0x00EE => self.pc = {
+                            // 00EE - return from a subroutine
+                            self.stack.pop().expect("Stack should not be empty")
+                        },
+                        0x00FB => {
+                            // 00FB - scroll right by 4 pixels in highres or 2 in lowres SUPERCHIP
+                            for row in self.pixels.iter_mut() {
+                                let mut new_row = vec![false, false, false, false];
+                                new_row.append(&mut row[..row.len() - 4].to_vec());
+                                *row = new_row;
+                            }
+                        },
+                        0x00FC => {
+                            // 00FC - scroll left by 4 pixels in highres or 2 in lowres SUPERCHIP
+                            for row in self.pixels.iter_mut() {
+                                let mut new_row = vec![false, false, false, false];
+                                *row = row[4..].to_vec();
+                                row.append(&mut new_row);
+                            }
+                        },
+                        0x00FD => {
+                            // 00FD - exit interperter SUPERCHIP
+                            self.load_rom(&vec![0x12, 0x00]); // just go to infinte loop
+                        },
+                        0x00FE => {
+                            // 00FE - enable lowres SUPERCHIP
+                            self.pixels = vec![vec![false; WIDTH]; HEIGHT];
+                            self.resolution = Resolution::LowRes;
+                        },
+                        0x00FF => {
+                            // 00FF - enable highres SUPERCHIP
+                            self.pixels = vec![vec![false; WIDTH * 2]; HEIGHT * 2];
+                            self.resolution = Resolution::HighRes;
+                        },
+                        unsopported => panic!("Unsopported opcode {:#06x} at {:#06x}", unsopported, self.pc),
+                    }
                 }
             }
             0x1 => {
@@ -283,11 +345,14 @@ impl CPU {
                 let start_row = self.regs[reg_y] as usize % HEIGHT;
                 let rows = n;
                 let sprite = &self.memory[self.addr_reg as usize..(self.addr_reg + rows as u16) as usize];
-
+                let sprite_size = match self.resolution {
+                    Resolution::HighRes => 16,
+                    Resolution::LowRes => 8,
+                };
                 self.regs[15] = 0;
 
                 for (row_i, sprite_row) in sprite.iter().enumerate() {
-                    for col_i in 0..8 {
+                    for col_i in 0..sprite_size {
                         let mut col = col_i + start_col;
                         let mut row = row_i + start_row;
 
@@ -306,10 +371,8 @@ impl CPU {
 
                         if sprite_pixel != screen_pixel {
                             self.pixels[row][col] = true;
-                            self.pixels_dirty = true;
                         } else {
                             self.pixels[row][col] = false;
-                            self.pixels_dirty = true;
                         }
 
                         // if gone from set to unset then set VF to 1
