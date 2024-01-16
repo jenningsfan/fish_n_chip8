@@ -341,45 +341,29 @@ impl CPU {
             0xD => {
                 // DXYN - Draw sprit to coord (VX, VY) - width 8 pixels, height N pixels.
                 //        Read from memory location I. VF set to 1 if any pixels erased
-                let start_col = self.regs[reg_x] as usize % WIDTH;
-                let start_row = self.regs[reg_y] as usize % HEIGHT;
+                let start_col = self.regs[reg_x] as usize % self.width();
+                let start_row = self.regs[reg_y] as usize % self.height();
                 let rows = n;
-                let sprite = &self.memory[self.addr_reg as usize..(self.addr_reg + rows as u16) as usize];
-                let sprite_size = match self.resolution {
-                    Resolution::HighRes => 16,
-                    Resolution::LowRes => 8,
+                
+                let sprite_row_bytes = match self.resolution {
+                    Resolution::HighRes => 2,
+                    Resolution::LowRes => 1,                  
                 };
+                
+                let sprite = &self.memory[self.addr_reg as usize..(self.addr_reg + rows as u16 * sprite_row_bytes) as usize].to_vec();
                 self.regs[15] = 0;
 
-                for (row_i, sprite_row) in sprite.iter().enumerate() {
-                    for col_i in 0..sprite_size {
-                        let mut col = col_i + start_col;
-                        let mut row = row_i + start_row;
-
-                        if col >= WIDTH || row >= HEIGHT {
-                            if self.quirks.screen_wrap {
-                                col = col % WIDTH;
-                                row = row % HEIGHT;
-                            }
-                            else {
-                                break;
-                            }
+                for (row, sprite_row) in sprite.iter().enumerate() {
+                    let mut row = start_row + row;
+                    if row > self.height() {
+                        if self.quirks.screen_wrap {
+                            row = row % self.height();
                         }
-
-                        let sprite_pixel = (*sprite_row & (1 << (7 - col_i))) == 1 << (7 - col_i); // the 7 - col_i is to make the sprite_row be read in the correct direction
-                        let screen_pixel = self.pixels[row][col];
-
-                        if sprite_pixel != screen_pixel {
-                            self.pixels[row][col] = true;
-                        } else {
-                            self.pixels[row][col] = false;
-                        }
-
-                        // if gone from set to unset then set VF to 1
-                        if screen_pixel == true && self.pixels[row][col] == false {
-                            self.regs[15] = 1;
+                        else {
+                            break;
                         }
                     }
+                    self.draw_sprite(start_col, row, *sprite_row);
                 }
             }
             0xE => {
@@ -493,5 +477,35 @@ impl CPU {
             }
             _ => panic!("should only be a nibble"),
         };
+    }
+
+    fn draw_sprite(&mut self, start_col: usize, row: usize, sprite_row: u8) {
+        for col_i in 0..8 {
+            let mut col = col_i + start_col;
+
+            if col >= self.width() {
+                if self.quirks.screen_wrap {
+                    col = col % self.width();
+                }
+                else {
+                    break;
+                }
+            }
+
+            let sprite_pixel = (sprite_row & (1 << (7 - col_i))) == 1 << (7 - col_i); // the 7 - col_i is to make the sprite_row be read in the correct direction
+            let screen_pixel = self.pixels[row][col];
+            
+            if sprite_pixel != screen_pixel {
+                self.pixels[row][col] = true;
+            } else {
+                self.pixels[row][col] = false;
+            }
+
+            // if gone from set to unset then set VF to 1
+            if screen_pixel == true && self.pixels[row][col] == false {
+                self.regs[15] = 1;
+            }
+        }
+
     }
 }
