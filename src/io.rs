@@ -324,8 +324,8 @@ impl EventHandler for EmulatorIO {
         self.update_gui(ctx)?;
 
         if ctx.time.ticks() % 100 == 0 {
-            println!("Delta frame time: {:?} ", ctx.time.delta());
-            println!("Average FPS: {}", ctx.time.fps());
+            // println!("Delta frame time: {:?} ", ctx.time.delta());
+            // println!("Average FPS: {}", ctx.time.fps());
         }
 
         Ok(())

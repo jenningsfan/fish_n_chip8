@@ -347,15 +347,21 @@ impl CPU {
                 
                 let sprite_row_bytes = match self.resolution {
                     Resolution::HighRes => 2,
-                    Resolution::LowRes => 1,                  
+                    Resolution::LowRes => 1,
                 };
                 
                 let sprite = &self.memory[self.addr_reg as usize..(self.addr_reg + rows as u16 * sprite_row_bytes) as usize].to_vec();
                 self.regs[15] = 0;
 
                 for (row, sprite_row) in sprite.iter().enumerate() {
-                    let mut row = start_row + row;
-                    if row > self.height() {
+                    let mut row = row;
+                    let mut col = start_col;
+                    if self.resolution == Resolution::HighRes && row % 2 == 1{
+                        row /= 2;
+                        col += 8;
+                    }
+                    row += start_row;
+                    if row >= self.height() {
                         if self.quirks.screen_wrap {
                             row = row % self.height();
                         }
@@ -363,7 +369,8 @@ impl CPU {
                             break;
                         }
                     }
-                    self.draw_sprite(start_col, row, *sprite_row);
+                    self.draw_sprite(col, row, *sprite_row);
+
                 }
             }
             0xE => {
