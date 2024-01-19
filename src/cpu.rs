@@ -8,7 +8,7 @@ pub const HEIGHT: usize = 32;
 
 const RAM_SIZE: usize = 4096;
 
-const FONT_DATA: [u8; 5 * 16] = [
+const LOW_RES_FONT: [u8; 5 * 16] = [
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
     0x20, 0x60, 0x20, 0x20, 0x70, // 1
     0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
@@ -27,8 +27,30 @@ const FONT_DATA: [u8; 5 * 16] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
-const FONT_START: usize = 0x50;
-const FONT_END: usize = FONT_START + FONT_DATA.len();
+const HIGH_RES_FONT: [u8; 10 * 16] = [
+    0xFF, 0xFF, 0xC3, 0xC3, 0xC3, 0xC3, 0xC3, 0xC3, 0xFF, 0xFF, // 0
+    0x18, 0x78, 0x78, 0x18, 0x18, 0x18, 0x18, 0x18, 0xFF, 0xFF, // 1
+    0xFF, 0xFF, 0x03, 0x03, 0xFF, 0xFF, 0xC0, 0xC0, 0xFF, 0xFF, // 2
+    0xFF, 0xFF, 0x03, 0x03, 0xFF, 0xFF, 0x03, 0x03, 0xFF, 0xFF, // 3
+    0xC3, 0xC3, 0xC3, 0xC3, 0xFF, 0xFF, 0x03, 0x03, 0x03, 0x03, // 4
+    0xFF, 0xFF, 0xC0, 0xC0, 0xFF, 0xFF, 0x03, 0x03, 0xFF, 0xFF, // 5
+    0xFF, 0xFF, 0xC0, 0xC0, 0xFF, 0xFF, 0xC3, 0xC3, 0xFF, 0xFF, // 6
+    0xFF, 0xFF, 0x03, 0x03, 0x06, 0x0C, 0x18, 0x18, 0x18, 0x18, // 7
+    0xFF, 0xFF, 0xC3, 0xC3, 0xFF, 0xFF, 0xC3, 0xC3, 0xFF, 0xFF, // 8
+    0xFF, 0xFF, 0xC3, 0xC3, 0xFF, 0xFF, 0x03, 0x03, 0xFF, 0xFF, // 9
+    0x7E, 0xFF, 0xC3, 0xC3, 0xC3, 0xFF, 0xFF, 0xC3, 0xC3, 0xC3, // A
+    0xFC, 0xFC, 0xC3, 0xC3, 0xFC, 0xFC, 0xC3, 0xC3, 0xFC, 0xFC, // B
+    0x3C, 0xFF, 0xC3, 0xC0, 0xC0, 0xC0, 0xC0, 0xC3, 0xFF, 0x3C, // C
+    0xFC, 0xFE, 0xC3, 0xC3, 0xC3, 0xC3, 0xC3, 0xC3, 0xFE, 0xFC, // D
+    0xFF, 0xFF, 0xC0, 0xC0, 0xFF, 0xFF, 0xC0, 0xC0, 0xFF, 0xFF, // E
+    0xFF, 0xFF, 0xC0, 0xC0, 0xFF, 0xFF, 0xC0, 0xC0, 0xC0, 0xC0  // F
+];
+
+const HIGH_RES_FONT_START: usize = LOW_RES_FONT_END;
+const HIGH_RES_FONT_END: usize = HIGH_RES_FONT_START + HIGH_RES_FONT.len();
+
+const LOW_RES_FONT_START: usize = 0x50;
+const LOW_RES_FONT_END: usize = LOW_RES_FONT_START + LOW_RES_FONT.len();
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum RegSaveLoadQuirk {
@@ -120,7 +142,9 @@ impl CPU {
             rng: thread_rng(),
         };
 
-        created.memory[FONT_START..FONT_END].copy_from_slice(&FONT_DATA);
+        created.memory[LOW_RES_FONT_START..LOW_RES_FONT_END].copy_from_slice(&LOW_RES_FONT);
+        created.memory[HIGH_RES_FONT_START..HIGH_RES_FONT_END].copy_from_slice(&HIGH_RES_FONT);
+
         created
     }
 
@@ -344,27 +368,47 @@ impl CPU {
                 let start_col = self.regs[reg_x] as usize % self.width();
                 let start_row = self.regs[reg_y] as usize % self.height();
                 let rows = n;
-                
-                let sprite_row_bytes = match self.resolution {
-                    Resolution::HighRes => 2,
-                    Resolution::LowRes => 1,                  
-                };
-                
-                let sprite = &self.memory[self.addr_reg as usize..(self.addr_reg + rows as u16 * sprite_row_bytes) as usize].to_vec();
-                self.regs[15] = 0;
 
-                for (row, sprite_row) in sprite.iter().enumerate() {
-                    let mut row = start_row + row;
-                    if row > self.height() {
-                        if self.quirks.screen_wrap {
-                            row = row % self.height();
+                if rows == 0 {
+                    let rows = 16;
+                    let sprite: Vec<u16> = self.memory[self.addr_reg as usize..(self.addr_reg + rows * 2 as u16) as usize].to_vec()
+                        .chunks_exact(2)
+                        .into_iter()
+                        .map(|a| u16::from_ne_bytes([a[0], a[1]]))
+                        .collect();
+                    self.regs[15] = 0;
+    
+                    for (row, sprite_row) in sprite.iter().enumerate() {
+                        let mut row = start_row + row;
+                        if row > self.height() {
+                            if self.quirks.screen_wrap {
+                                row = row % self.height();
+                            }
+                            else {
+                                break;
+                            }
                         }
-                        else {
-                            break;
-                        }
+                        self.draw_sprite(start_col, row, (*sprite_row & 0xFF) as u8);
+                        self.draw_sprite(start_col + 8, row, (*sprite_row >> 8) as u8);
                     }
-                    self.draw_sprite(start_col, row, *sprite_row);
                 }
+                else {
+                    let sprite = &self.memory[self.addr_reg as usize..(self.addr_reg + rows as u16) as usize].to_vec();
+                    self.regs[15] = 0;
+    
+                    for (row, sprite_row) in sprite.iter().enumerate() {
+                        let mut row = start_row + row;
+                        if row > self.height() {
+                            if self.quirks.screen_wrap {
+                                row = row % self.height();
+                            }
+                            else {
+                                break;
+                            }
+                        }
+                        self.draw_sprite(start_col, row, *sprite_row);
+                    }
+                } 
             }
             0xE => {
                 match opcode & 0x00FF {
@@ -388,7 +432,7 @@ impl CPU {
                     0x07 => {
                         // FX07 - Sets VX to delay time
                         self.regs[reg_x] = self.delay_timer;
-                    }
+                    },
                     0x0A => {
                         // FX0A - Get key. Blocking instruction. Waits for key input and then puts it in VX. However, timers should still decrement
                         if self.pressed_key == None {
@@ -405,24 +449,29 @@ impl CPU {
                             self.pressed_key = None;
                             self.waiting_for_key_press = false;
                         }
-                    }
+                    },
                     0x15 => {
                         // FX15 - Delay timer = VX
                         self.delay_timer = self.regs[reg_x];
-                    }
+                    },
                     0x18 => {
                         // FX18 - Sound timer = VX
                         self.sound_timer = self.regs[reg_x];
-                    }
+                    },
                     0x1E => {
                         // FX1E - I += VX. VF not affected
                         self.addr_reg += self.regs[reg_x] as u16;
-                    }
+                    },
                     0x29 => {
                         // FX29 - I = addr of hex character in VX
                         let reg = self.regs[reg_x] as u16;
-                        self.addr_reg = FONT_START as u16 + reg * 5;
-                    }
+                        self.addr_reg = LOW_RES_FONT_START as u16 + reg * 5;
+                    },
+                    0x30 => {
+                        // FX29 - I = addr of hex character in VX
+                        let reg = self.regs[reg_x] as u16;
+                        self.addr_reg = HIGH_RES_FONT_START as u16 + reg * 10;
+                    },
                     0x33 => {
                         // FX33 - Store BCD of VX in I. I is hundreds. I + 1 tens. I + 2 units.
                         let mut bcd: u32 = self.regs[reg_x] as u32;
@@ -443,7 +492,7 @@ impl CPU {
                         self.memory[self.addr_reg as usize] = ((bcd & 0xF0000) >> 16) as u8;
                         self.memory[self.addr_reg as usize + 1] = ((bcd & 0x0F000) >> 12) as u8;
                         self.memory[self.addr_reg as usize + 2] = ((bcd & 0x00F00) >> 8) as u8;
-                    }
+                    },
                     0x55 => {
                         // FX55 - Dump regs V0 - VX(inclusive) to I - I + X. I is unmodified
                         let total_regs = reg_x as u16 + 1;
@@ -457,7 +506,7 @@ impl CPU {
                             RegSaveLoadQuirk::X => self.addr_reg += total_regs,
                             RegSaveLoadQuirk::XPlusOne => self.addr_reg += total_regs + 1,
                         };
-                    }
+                    },
                     0x65 => {
                         // FX65 - Load regs V0 - VX(inclusive) from I - I + X. I is unmodified
                         let total_regs = reg_x as u16 + 1;
@@ -471,7 +520,9 @@ impl CPU {
                             RegSaveLoadQuirk::X => self.addr_reg += total_regs,
                             RegSaveLoadQuirk::XPlusOne => self.addr_reg += total_regs + 1,
                         };
-                    }
+                    },
+                    0x75 => {},
+                    0x85 => {},
                     _ => panic!("Unsopported opcode {:#06x} at {:#06x}", opcode, self.pc),
                 }
             }
